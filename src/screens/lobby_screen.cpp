@@ -20,10 +20,13 @@ LobbyScreen::LobbyScreen() :
     hoverReady(0.0f),
     hoverStart(0.0f),
     hoverCopy(0.0f),
-    hoverGlobalBack(0.0f) {
+    hoverGlobalBack(0.0f),
+    optionScroll(0.0f),
+    optionScrollMax(0.0f) {
 
     menuFont = LoadFontEx("assets/fonts/BruceForeverRegular-X3jd2.ttf", 60, nullptr, 0);
     if (menuFont.texture.id == 0) menuFont = GetFontDefault();
+    choiceSound = LoadSound("assets/sounds/choice.wav");
 
     if (isHost) {
         lanAddress = NetworkManager::GetInstance().GetLocalIPAddress() + ":" +
@@ -33,51 +36,40 @@ LobbyScreen::LobbyScreen() :
     background = new MenuBackground(playerSkin, MenuBackground::BackdropStyle::CINEMATIC_BEACH);
     preview = new CharacterPreview();
 
-    shell       = { 50.0f,  70.0f, 1180.0f, 530.0f };
-    rosterPanel = {  80.0f, 150.0f,  640.0f, 420.0f };
+    shell       = { 30.0f,  40.0f, 1240.0f, 620.0f };
+    rosterPanel = { 60.0f, 120.0f,  630.0f, 510.0f };
 
-    // Right-column layout (rightX=780, rightW=390, shell bottom=600)
-    // Avoid top overlap: "Ready X/Y" is at shell.y+52 = 122.
-    // y=134  MAP label
-    // y=148  Map cycle selector (h=32) -> bottom 180
-    // y=186  Map preview (h=120) -> bottom 306
-    // y=318  MODE label
-    // y=332  Mode cycle selector (h=32) -> bottom 364
-    // y=376  Chip row 0 label
-    // y=388  Chip row 0 (h=28)  -> bottom 416
-    // y=420  Chip row 1 (h=28)  -> bottom 448
-    // y=456  READY btn  (h=36)  -> bottom 492
-    // y=498  START btn  (h=36)  -> bottom 534
-    // y=540  COPY btn   (h=32)  -> bottom 572
-    const float rightX  = 780.0f;
-    const float rightW  = 390.0f;
+    // Right-column layout.
+    const float rightX  = 752.0f;
+    const float rightW  = 474.0f;
     const float cardGap = 10.0f;
-    const float arrowW  = 40.0f;
+    const float arrowW  = 42.0f;
 
-    // Map cycle selector
-    const float mapRowY = 148.0f;
+    // ── MAP section ──────────────────────────────
+    const float mapRowY = 136.0f;
     const float mapRowH = 32.0f;
     prevMapBtn = { rightX,                     mapRowY, arrowW,               mapRowH };
     mapDisplay = { rightX + arrowW + 4.0f,     mapRowY, rightW - arrowW*2-8, mapRowH };
     nextMapBtn = { rightX + rightW - arrowW,   mapRowY, arrowW,               mapRowH };
-    mapPreview = { rightX,                     186.0f,  rightW,               120.0f };
+    mapPreview = { rightX,                     172.0f,  rightW,               180.0f  };
     hoverPrevMap = 0.0f;
     hoverNextMap = 0.0f;
 
-    // Mode cycle selector
-    const float modeRowY = 332.0f;
-    const float modeRowH = 32.0f;
+    // ── MODE section ──────────────────────────────
+    const float modeRowY = 384.0f;
+    const float modeRowH = 34.0f;
     prevModeBtn = { rightX,                     modeRowY, arrowW,               modeRowH };
     modeDisplay = { rightX + arrowW + 4.0f,     modeRowY, rightW - arrowW*2-8, modeRowH };
     nextModeBtn = { rightX + rightW - arrowW,   modeRowY, arrowW,               modeRowH };
     hoverPrevMode = 0.0f;
     hoverNextMode = 0.0f;
 
+    // ── CHIP rows ────────────────────────────────
     const float chipH  = 28.0f;
     const float chipW3 = (rightW - cardGap * 2.0f) / 3.0f;
     const float chipW2 = (rightW - cardGap) / 2.0f;
-    const float chipY0 = 388.0f;
-    const float chipY1 = 420.0f;
+    const float chipY0 = 448.0f;
+    const float chipY1 = 508.0f;
     
     for (int i = 0; i < 3; ++i) {
         chipWin[i]   = { rightX + i * (chipW3 + cardGap), chipY0, chipW3, chipH };
@@ -90,9 +82,11 @@ LobbyScreen::LobbyScreen() :
         hoverChipGoal[i] = 0.0f;
     }
 
-    readyBtn = { rightX, 456.0f, rightW, 36.0f };
-    startBtn = { rightX, 498.0f, rightW, 36.0f };
-    copyBtn  = { rightX, 540.0f, rightW, 32.0f };
+    // ── Action buttons ───────────────────────────
+    readyBtn = { rightX, 558.0f, rightW, 40.0f };
+    startBtn = { rightX, 606.0f, rightW, 40.0f };
+    copyBtn  = { rightX, 668.0f, rightW, 32.0f };
+    optionScrollMax = 80.0f;
 
     for (int i = 0; i < MAX_LOBBY_PLAYERS; ++i) {
         switchGR[i] = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -106,6 +100,7 @@ LobbyScreen::LobbyScreen() :
 }
 
 LobbyScreen::~LobbyScreen() {
+    UnloadSound(choiceSound);
     UnloadRenderTexture(cachedPreview);
     delete preview;
     delete background;
@@ -124,6 +119,39 @@ bool LobbyScreen::Update(float deltaTime) {
 
     NetworkManager::GetInstance().Update();
 
+    std::string currentMap = NetworkManager::GetInstance().selectedMapName;
+    MapData* md = MapRegistry::GetInstance().GetMap(currentMap);
+    if (md && md->pixelWidth > 0) {
+        float desiredHeight = mapPreview.width * ((float)md->pixelHeight / (float)md->pixelWidth);
+        if (desiredHeight < 64.0f) desiredHeight = 64.0f;
+        // Cap max height so it doesn't take over the entire scroll view infinitely
+        if (desiredHeight > 400.0f) desiredHeight = 400.0f; 
+        
+        if (std::abs(mapPreview.height - desiredHeight) > 0.5f) {
+            float diff = desiredHeight - mapPreview.height;
+            mapPreview.height = desiredHeight;
+            
+            UnloadRenderTexture(cachedPreview);
+            cachedPreview = LoadRenderTexture((int)mapPreview.width, (int)mapPreview.height);
+            cachedPreviewName = ""; // Force redraw
+            
+            modeDisplay.y += diff;
+            prevModeBtn.y += diff;
+            nextModeBtn.y += diff;
+            for (int i=0; i<3; ++i) {
+                chipWin[i].y += diff;
+                chipLimit[i].y += diff;
+            }
+            for (int i=0; i<2; ++i) chipGoal[i].y += diff;
+            
+            readyBtn.y += diff;
+            startBtn.y += diff;
+            copyBtn.y += diff;
+            
+            optionScrollMax += diff;
+            if (optionScrollMax < 0.0f) optionScrollMax = 0.0f;
+        }
+    }
     bool canStart = isHost && NetworkManager::GetInstance().AllPlayersReady();
 
     if (IsKeyPressed(KEY_ESCAPE)) {
@@ -131,12 +159,13 @@ bool LobbyScreen::Update(float deltaTime) {
         return false;
     }
 
-    // Back button like in OnlineMenu (top-left)
-    Rectangle globalBackBtn = { 28.0f, VIRTUAL_HEIGHT - 60.0f, 150.0f, 42.0f };
+    // Keep the back button in the top margin, outside the lobby shell.
+    Rectangle globalBackBtn = { 28.0f, 4.0f, 168.0f, 32.0f };
     bool hBack = CheckCollisionPointRec(Ui::RemapMouseToVirtual(), globalBackBtn);
     hoverGlobalBack = Ui::Approach(hoverGlobalBack, hBack ? 1.0f : 0.0f, 8.0f, deltaTime);
 
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && hBack) {
+        PlaySound(choiceSound);
         NetworkManager::GetInstance().Disconnect();
         return false;
     }
@@ -158,35 +187,44 @@ bool LobbyScreen::Update(float deltaTime) {
     }
 
     Vector2 mouse = Ui::RemapMouseToVirtual();
-    bool hReady = CheckCollisionPointRec(mouse, readyBtn);
-    bool hStart = canStart && CheckCollisionPointRec(mouse, startBtn);
-    bool hCopy  = isHost && CheckCollisionPointRec(mouse, copyBtn);
+    float viewportY = shell.y + 78.0f;
+    Rectangle optionViewport = { 736.0f, viewportY, 506.0f, (shell.y + shell.height - 12.0f) - viewportY };
+    if (CheckCollisionPointRec(mouse, optionViewport)) {
+        optionScroll -= GetMouseWheelMove() * 24.0f;
+        if (optionScroll < 0.0f) optionScroll = 0.0f;
+        if (optionScroll > optionScrollMax) optionScroll = optionScrollMax;
+    }
+    Vector2 optionMouse = mouse;
+    optionMouse.y += optionScroll;
+    bool hReady = CheckCollisionPointRec(optionMouse, readyBtn);
+    bool hStart = canStart && CheckCollisionPointRec(optionMouse, startBtn);
+    bool hCopy  = isHost && CheckCollisionPointRec(optionMouse, copyBtn);
 
     hoverReady = Ui::Approach(hoverReady, hReady ? 1.0f : 0.0f, 8.0f, deltaTime);
     hoverStart = Ui::Approach(hoverStart, hStart ? 1.0f : 0.0f, 8.0f, deltaTime);
     hoverCopy  = Ui::Approach(hoverCopy,  hCopy  ? 1.0f : 0.0f, 8.0f, deltaTime);
 
     // Map cycle selector hover animations
-    bool hPrevMap = isHost && CheckCollisionPointRec(mouse, prevMapBtn);
-    bool hNextMap = isHost && CheckCollisionPointRec(mouse, nextMapBtn);
+    bool hPrevMap = isHost && CheckCollisionPointRec(optionMouse, prevMapBtn);
+    bool hNextMap = isHost && CheckCollisionPointRec(optionMouse, nextMapBtn);
     hoverPrevMap = Ui::Approach(hoverPrevMap, hPrevMap ? 1.0f : 0.0f, 8.0f, deltaTime);
     hoverNextMap = Ui::Approach(hoverNextMap, hNextMap ? 1.0f : 0.0f, 8.0f, deltaTime);
 
     // Mode cycle selector hover animations
-    bool hPrev = isHost && CheckCollisionPointRec(mouse, prevModeBtn);
-    bool hNext = isHost && CheckCollisionPointRec(mouse, nextModeBtn);
+    bool hPrev = isHost && CheckCollisionPointRec(optionMouse, prevModeBtn);
+    bool hNext = isHost && CheckCollisionPointRec(optionMouse, nextModeBtn);
     hoverPrevMode = Ui::Approach(hoverPrevMode, hPrev ? 1.0f : 0.0f, 8.0f, deltaTime);
     hoverNextMode = Ui::Approach(hoverNextMode, hNext ? 1.0f : 0.0f, 8.0f, deltaTime);
 
     // Chip hover animations
     for (int i = 0; i < 3; ++i) {
-        bool hovW = isHost && CheckCollisionPointRec(mouse, chipWin[i]);
-        bool hovL = isHost && CheckCollisionPointRec(mouse, chipLimit[i]);
+        bool hovW = isHost && CheckCollisionPointRec(optionMouse, chipWin[i]);
+        bool hovL = isHost && CheckCollisionPointRec(optionMouse, chipLimit[i]);
         hoverChipWin[i]   = Ui::Approach(hoverChipWin[i],   hovW ? 1.0f : 0.0f, 8.0f, deltaTime);
         hoverChipLimit[i] = Ui::Approach(hoverChipLimit[i], hovL ? 1.0f : 0.0f, 8.0f, deltaTime);
     }
     for (int i = 0; i < 2; ++i) {
-        bool hovG = isHost && CheckCollisionPointRec(mouse, chipGoal[i]);
+        bool hovG = isHost && CheckCollisionPointRec(optionMouse, chipGoal[i]);
         hoverChipGoal[i] = Ui::Approach(hoverChipGoal[i], hovG ? 1.0f : 0.0f, 8.0f, deltaTime);
     }
     // Per-player team-switch pill hovers (only for rows the user can actually click).
@@ -202,15 +240,19 @@ bool LobbyScreen::Update(float deltaTime) {
     }
 
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        bool playedSound = false;
         if (hReady) {
             bool currentReady = NetworkManager::GetInstance().IsLocalPlayerReady();
             NetworkManager::GetInstance().SetPlayerReady(!currentReady);
+            if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
         } else if (hStart) {
             NetworkManager::GetInstance().StartGame();
             startGame = true;
+            if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
             return false;
         } else if (hCopy && !lanAddress.empty()) {
             SetClipboardText(lanAddress.c_str());
+            if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
         }
 
         if (isHost) {
@@ -227,14 +269,15 @@ bool LobbyScreen::Update(float deltaTime) {
                 }
                 
                 int newIdx = curIdx;
-                if (CheckCollisionPointRec(mouse, prevMapBtn)) {
+                if (CheckCollisionPointRec(optionMouse, prevMapBtn)) {
                     newIdx = (curIdx + mapNames.size() - 1) % mapNames.size();
-                } else if (CheckCollisionPointRec(mouse, nextMapBtn)) {
+                } else if (CheckCollisionPointRec(optionMouse, nextMapBtn)) {
                     newIdx = (curIdx + 1) % mapNames.size();
                 }
                 
                 if (newIdx != curIdx) {
                     nm.selectedMapName = mapNames[newIdx];
+                    if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                     PacketMapChanged pkt{};
                     pkt.header.type = PacketType::MAP_CHANGED;
                     pkt.header.playerID = nm.GetLocalPlayerID();
@@ -247,11 +290,13 @@ bool LobbyScreen::Update(float deltaTime) {
             // Mode cycle selector clicks: < and > cycle through modes
             auto& nm = NetworkManager::GetInstance();
             int curMode = (int)nm.currentGameMode;
-            if (CheckCollisionPointRec(mouse, prevModeBtn)) {
+            if (CheckCollisionPointRec(optionMouse, prevModeBtn)) {
                 int newMode = (curMode + 2) % 3; // go backwards
+                if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                 nm.UpdateLobbySettings((OnlineGameMode)newMode, nm.timeLimit, nm.killLimit, nm.roundLimit);
-            } else if (CheckCollisionPointRec(mouse, nextModeBtn)) {
+            } else if (CheckCollisionPointRec(optionMouse, nextModeBtn)) {
                 int newMode = (curMode + 1) % 3; // go forwards
+                if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                 nm.UpdateLobbySettings((OnlineGameMode)newMode, nm.timeLimit, nm.killLimit, nm.roundLimit);
             }
             // Chip clicks — only the row matching the current mode is visible (others are
@@ -259,7 +304,8 @@ bool LobbyScreen::Update(float deltaTime) {
             if (nm.currentGameMode == OnlineGameMode::ELIMINATION) {
                 const int rounds[3] = { 6, 8, 14 };
                 for (int i = 0; i < 3; ++i) {
-                    if (CheckCollisionPointRec(mouse, chipWin[i]) && nm.roundLimit != rounds[i]) {
+                    if (CheckCollisionPointRec(optionMouse, chipWin[i]) && nm.roundLimit != rounds[i]) {
+                        if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                         nm.UpdateLobbySettings(nm.currentGameMode, nm.timeLimit, nm.killLimit, rounds[i]);
                         break;
                     }
@@ -268,9 +314,11 @@ bool LobbyScreen::Update(float deltaTime) {
                 bool isTimeGoal = (nm.timeLimit > 0);
 
                 // Goal Type selection (first row: chipGoal)
-                if (CheckCollisionPointRec(mouse, chipGoal[0]) && isTimeGoal) {
+                if (CheckCollisionPointRec(optionMouse, chipGoal[0]) && isTimeGoal) {
+                    if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                     nm.UpdateLobbySettings(nm.currentGameMode, 0, 40, nm.roundLimit);
-                } else if (CheckCollisionPointRec(mouse, chipGoal[1]) && !isTimeGoal) {
+                } else if (CheckCollisionPointRec(optionMouse, chipGoal[1]) && !isTimeGoal) {
+                    if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                     nm.UpdateLobbySettings(nm.currentGameMode, 300, 0, nm.roundLimit);
                 }
 
@@ -278,7 +326,8 @@ bool LobbyScreen::Update(float deltaTime) {
                 if (isTimeGoal) {
                     const int times[3] = { 300, 600, 900 };   // 5m / 10m / 15m in seconds
                     for (int i = 0; i < 3; ++i) {
-                        if (CheckCollisionPointRec(mouse, chipLimit[i]) && nm.timeLimit != times[i]) {
+                        if (CheckCollisionPointRec(optionMouse, chipLimit[i]) && nm.timeLimit != times[i]) {
+                            if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                             nm.UpdateLobbySettings(nm.currentGameMode, times[i], 0, nm.roundLimit);
                             break;
                         }
@@ -286,7 +335,8 @@ bool LobbyScreen::Update(float deltaTime) {
                 } else {
                     const int kills[3] = { 40, 60, 100 };
                     for (int i = 0; i < 3; ++i) {
-                        if (CheckCollisionPointRec(mouse, chipLimit[i]) && nm.killLimit != kills[i]) {
+                        if (CheckCollisionPointRec(optionMouse, chipLimit[i]) && nm.killLimit != kills[i]) {
+                            if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                             nm.UpdateLobbySettings(nm.currentGameMode, 0, kills[i], nm.roundLimit);
                             break;
                         }
@@ -300,8 +350,10 @@ bool LobbyScreen::Update(float deltaTime) {
             for (int i = 0; i < (int)players.size() && i < MAX_LOBBY_PLAYERS; ++i) {
                 if (players[i].username.empty() || players[i].username == "Unknown") continue;
                 if (CheckCollisionPointRec(mouse, switchGR[i])) {
+                    if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                     nm.SetPlayerTeam(players[i].peerID, 1);
                 } else if (CheckCollisionPointRec(mouse, switchBL[i])) {
+                    if (!playedSound) { PlaySound(choiceSound); playedSound = true; }
                     nm.SetPlayerTeam(players[i].peerID, 2);
                 }
             }
@@ -351,8 +403,13 @@ bool LobbyScreen::Update(float deltaTime) {
 }
 
 void LobbyScreen::DrawRoster() {
-    DrawRectangleRec(rosterPanel, Fade(BLACK, 0.28f));
-    DrawRectangleLinesEx(rosterPanel, 1.5f, Fade(UiTheme::PanelBorder(), 0.7f));
+    DrawRectangleRec(rosterPanel, Fade(UiTheme::PanelBg(), 0.72f));
+    DrawRectangleLinesEx(rosterPanel, 1.5f, Fade(UiTheme::PanelBorder(), 0.85f));
+    DrawRectangle((int)rosterPanel.x, (int)rosterPanel.y, 5, (int)rosterPanel.height,
+                  Fade(UiTheme::SkyAccent(), 0.75f));
+    DrawLineEx({ rosterPanel.x + 18.0f, rosterPanel.y + 43.0f },
+               { rosterPanel.x + rosterPanel.width - 18.0f, rosterPanel.y + 43.0f },
+               1.0f, Fade(UiTheme::PanelBorder(), 0.55f));
 
     const auto& players = NetworkManager::GetInstance().GetPlayers();
     OnlineGameMode mode = NetworkManager::GetInstance().currentGameMode;
@@ -372,6 +429,9 @@ void LobbyScreen::DrawRoster() {
             Rectangle row = { rosterPanel.x + 16, y, rosterPanel.width - 32, rowH - 10 };
             DrawRectangleRec(row, Fade(UiTheme::ButtonIdle(), isLocal ? 0.95f : 0.7f));
             DrawRectangleLinesEx(row, 1.0f, Fade(isLocal ? UiTheme::SkyAccent() : UiTheme::PanelBorder(), 0.5f));
+            if (isLocal) {
+                DrawRectangle((int)row.x, (int)row.y, 4, (int)row.height, UiTheme::SkyAccent());
+            }
 
             Rectangle head = { row.x + 12, row.y + 10, 48, 48 };
             if (preview) preview->DrawHead(player.charSkin, head);
@@ -525,7 +585,7 @@ void LobbyScreen::DrawRoster() {
 }
 
 void LobbyScreen::DrawModeSelector() {
-    Ui::DrawSectionLabel(menuFont, "MODE", { 780.0f, modeDisplay.y - 16.0f }, 12.0f);
+    Ui::DrawSectionLabel(menuFont, "MODE", { 758.0f, modeDisplay.y - 20.0f }, 13.0f);
 
     const char* modeNames[3] = { "ELIMINATION", "FREE FOR ALL", "TEAM DM" };
     int activeMode = (int)NetworkManager::GetInstance().currentGameMode;
@@ -536,8 +596,11 @@ void LobbyScreen::DrawModeSelector() {
     if (hoverPrevMode > 0.01f) prevFill = Fade(UiTheme::ButtonHover(), hoverPrevMode);
     DrawRectangleRec(prevModeBtn, prevFill);
     DrawRectangleLinesEx(prevModeBtn, 1.5f, Fade(UiTheme::PanelBorder(), 0.6f + hoverPrevMode * 0.4f));
-    Vector2 centerPrev = { prevModeBtn.x + prevModeBtn.width/2, prevModeBtn.y + prevModeBtn.height/2 };
-    DrawTriangle({centerPrev.x - 4, centerPrev.y}, {centerPrev.x + 4, centerPrev.y - 6}, {centerPrev.x + 4, centerPrev.y + 6}, isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted());
+        Color prevArrowColor = isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted();
+        float prevArrowX = prevModeBtn.x + prevModeBtn.width * 0.5f;
+        float prevArrowY = prevModeBtn.y + prevModeBtn.height * 0.5f;
+        DrawLineEx({ prevArrowX + 4.0f, prevArrowY - 6.0f }, { prevArrowX - 3.0f, prevArrowY }, 2.0f, prevArrowColor);
+        DrawLineEx({ prevArrowX - 3.0f, prevArrowY }, { prevArrowX + 4.0f, prevArrowY + 6.0f }, 2.0f, prevArrowColor);
 
     // Center display
     DrawRectangleRec(modeDisplay, Fade(UiTheme::AccentGold(), 0.15f));
@@ -555,8 +618,11 @@ void LobbyScreen::DrawModeSelector() {
     if (hoverNextMode > 0.01f) nextFill = Fade(UiTheme::ButtonHover(), hoverNextMode);
     DrawRectangleRec(nextModeBtn, nextFill);
     DrawRectangleLinesEx(nextModeBtn, 1.5f, Fade(UiTheme::PanelBorder(), 0.6f + hoverNextMode * 0.4f));
-    Vector2 centerNext = { nextModeBtn.x + nextModeBtn.width/2, nextModeBtn.y + nextModeBtn.height/2 };
-    DrawTriangle({centerNext.x + 4, centerNext.y}, {centerNext.x - 4, centerNext.y + 6}, {centerNext.x - 4, centerNext.y - 6}, isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted());
+        Color nextArrowColor = isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted();
+        float nextArrowX = nextModeBtn.x + nextModeBtn.width * 0.5f;
+        float nextArrowY = nextModeBtn.y + nextModeBtn.height * 0.5f;
+        DrawLineEx({ nextArrowX - 4.0f, nextArrowY - 6.0f }, { nextArrowX + 3.0f, nextArrowY }, 2.0f, nextArrowColor);
+        DrawLineEx({ nextArrowX + 3.0f, nextArrowY }, { nextArrowX - 4.0f, nextArrowY + 6.0f }, 2.0f, nextArrowColor);
 }
 
 void LobbyScreen::DrawChipRows() {
@@ -564,7 +630,7 @@ void LobbyScreen::DrawChipRows() {
     OnlineGameMode mode = NetworkManager::GetInstance().currentGameMode;
     if (mode == OnlineGameMode::ELIMINATION) {
         Ui::DrawSectionLabel(menuFont, "WIN LIMIT (ROUNDS)",
-                             { 780.0f, chipWin[0].y - 18.0f }, 12.0f);
+                             { 758.0f, chipWin[0].y - 20.0f }, 13.0f);
         const char* labels[3] = { "6", "8", "14" };
         int active = (NetworkManager::GetInstance().roundLimit == 8) ? 1
                    : (NetworkManager::GetInstance().roundLimit == 14) ? 2 : 0;
@@ -594,7 +660,7 @@ void LobbyScreen::DrawChipRows() {
         bool isTimeGoal = (NetworkManager::GetInstance().timeLimit > 0);
 
         Ui::DrawSectionLabel(menuFont, "GOAL TYPE",
-                             { 780.0f, chipGoal[0].y - 18.0f }, 12.0f);
+                             { 758.0f, chipGoal[0].y - 20.0f }, 13.0f);
         const char* goalLabels[2] = { "KILLS", "TIME" };
         int activeGoal = isTimeGoal ? 1 : 0;
         for (int i = 0; i < 2; ++i) {
@@ -621,7 +687,7 @@ void LobbyScreen::DrawChipRows() {
 
         if (isTimeGoal) {
             Ui::DrawSectionLabel(menuFont, "TIME LIMIT",
-                                 { 780.0f, chipLimit[0].y - 18.0f }, 12.0f);
+                                 { 758.0f, chipLimit[0].y - 20.0f }, 13.0f);
             const char* labels[3] = { "5m", "10m", "15m" };
             int cur = NetworkManager::GetInstance().timeLimit;
             int active = (cur == 300) ? 0 : (cur == 600) ? 1 : 2;
@@ -648,7 +714,7 @@ void LobbyScreen::DrawChipRows() {
             }
         } else {
             Ui::DrawSectionLabel(menuFont, "KILL LIMIT",
-                                 { 780.0f, chipLimit[0].y - 18.0f }, 12.0f);
+                                 { 758.0f, chipLimit[0].y - 20.0f }, 13.0f);
             const char* klabels[3] = { "40", "60", "100" };
             int curK = NetworkManager::GetInstance().killLimit;
             int activeK = (curK == 40) ? 0 : (curK == 60) ? 1 : 2;
@@ -680,6 +746,44 @@ void LobbyScreen::DrawChipRows() {
 void LobbyScreen::DrawMapCards() { /* map drawing moved inline in Draw() */ }
 
 void LobbyScreen::Draw(RenderTexture2D target) {
+    std::string currentMap = NetworkManager::GetInstance().selectedMapName;
+    MapData* previewMd = MapRegistry::GetInstance().GetMap(currentMap);
+    if (previewMd && previewMd->tmxMap) {
+        // Update cache if map changed
+        if (cachedPreviewName != currentMap) {
+            BeginTextureMode(cachedPreview);
+            ClearBackground(Color{ 18, 20, 28, 255 });
+
+            float scaleX = mapPreview.width  / (float)previewMd->pixelWidth;
+            float scaleY = mapPreview.height / (float)previewMd->pixelHeight;
+            // Fit the map within the preview area without cropping.
+            float scale  = scaleX < scaleY ? scaleX : scaleY;
+
+            TraceLog(LOG_INFO, "LobbyScreen: Updating map preview for %s (Size: %dx%d, Scale: %f)",
+                     currentMap.c_str(), previewMd->pixelWidth, previewMd->pixelHeight, scale);
+
+            Camera2D miniCam = {};
+            miniCam.zoom     = scale;
+            miniCam.target   = { previewMd->pixelWidth * 0.5f, previewMd->pixelHeight * 0.5f };
+            miniCam.offset   = { mapPreview.width * 0.5f, mapPreview.height * 0.5f };
+            miniCam.rotation = 0.0f;
+
+            BeginMode2D(miniCam);
+            // Draw the actual TMX map. Use explicit map bounds because
+            // RayTMX otherwise derives culling from the window size,
+            // which is unrelated to this small render texture.
+            Rectangle mapViewport = {
+                -10000.0f, -10000.0f,
+                20000.0f, 20000.0f
+            };
+            DrawTMX(previewMd->tmxMap, &miniCam, &mapViewport, 0, 0, WHITE);
+            EndMode2D();
+
+            EndTextureMode();
+            cachedPreviewName = currentMap;
+        }
+    }
+
     if (background) {
         background->Draw(target, fadeIn, blurStrength);
     } else {
@@ -692,24 +796,56 @@ void LobbyScreen::Draw(RenderTexture2D target) {
     Ui::DrawVignette(0.65f);
     Ui::DrawGlassPanel(shell, 0.95f);
 
-    Ui::DrawSectionLabel(menuFont, "LOBBY", { shell.x + 36, shell.y + 18 }, 28.0f);
+    // Gold top accent bar on the shell
+    DrawRectangle((int)shell.x, (int)shell.y, (int)shell.width, 3,
+                  Fade(UiTheme::AccentGold(), 0.75f));
+
+    // Give the room controls their own visual rail over the animated backdrop.
+    Rectangle roomRail = { 736.0f, shell.y + 12.0f, 506.0f, shell.height - 24.0f };
+    DrawRectangleRec(roomRail, Fade(UiTheme::PanelBg(), 0.48f));
+    DrawRectangleLinesEx(roomRail, 1.0f, Fade(UiTheme::PanelBorder(), 0.50f));
+    // Gold rule below ROOM header
+    DrawLineEx({ 736.0f, shell.y + 76.0f },
+               { 1242.0f, shell.y + 76.0f },
+               1.5f, Fade(UiTheme::AccentGold(), 0.42f));
+
+    // LOBBY title with gold underline
+    Ui::DrawSectionLabel(menuFont, "LOBBY", { shell.x + 32, shell.y + 16 }, 30.0f);
+    float lobbyTitleW = MeasureTextEx(menuFont, "LOBBY", 30.0f, 1.0f).x;
+    DrawRectangle((int)(shell.x + 32), (int)(shell.y + 52), (int)lobbyTitleW, 3,
+                  Fade(UiTheme::AccentGold(), 0.85f));
     const char* role = isHost ? "You are the Host" : "You are a Player";
     DrawTextEx(menuFont, role,
-               { shell.x + 36, shell.y + 52 }, 13.0f, 1.0f,
+               { shell.x + 32, shell.y + 60 }, 13.0f, 1.0f,
                isHost ? UiTheme::AccentGold() : UiTheme::TextMuted());
 
     DrawRoster();
 
-    // Right actions
-    Ui::DrawSectionLabel(menuFont, "ROOM", { 780, shell.y + 18 }, 20.0f);
+    // Right actions — ROOM header
+    Ui::DrawSectionLabel(menuFont, "ROOM", { 758, shell.y + 16 }, 22.0f);
 
     int readyCount = NetworkManager::GetInstance().GetReadyPlayerCount();
     int totalCount = NetworkManager::GetInstance().GetTotalPlayerCount();
+    bool allReady = NetworkManager::GetInstance().AllPlayersReady();
     std::string status = "Ready  " + std::to_string(readyCount) + " / " + std::to_string(totalCount);
-    DrawTextEx(menuFont, status.c_str(), { 780, shell.y + 52 }, 14.0f, 1.0f, UiTheme::TextMuted());
+    // Colored status dot
+    DrawCircle((int)(758 + 5), (int)(shell.y + 58 + 7), 5.0f,
+               allReady ? UiTheme::ReadyGreen() : Fade(UiTheme::TextMuted(), 0.6f));
+    DrawTextEx(menuFont, status.c_str(), { 758 + 16, shell.y + 52 }, 14.0f, 1.0f,
+               allReady ? UiTheme::ReadyGreen() : UiTheme::TextMuted());
+
+    float viewportY = shell.y + 78.0f;
+    Rectangle optionViewport = { 736.0f, viewportY, 506.0f, (shell.y + shell.height - 12.0f) - viewportY };
+    BeginScissorMode((int)optionViewport.x, (int)optionViewport.y,
+                     (int)optionViewport.width, (int)optionViewport.height);
+    Camera2D optionCamera = {};
+    optionCamera.target = { 0.0f, optionScroll };
+    optionCamera.offset = { 0.0f, 0.0f };
+    optionCamera.zoom = 1.0f;
+    BeginMode2D(optionCamera);
 
     // Map selection drawing
-    Ui::DrawSectionLabel(menuFont, "MAP", { 780, mapDisplay.y - 16.0f }, 12.0f);
+    Ui::DrawSectionLabel(menuFont, "MAP", { 758, mapDisplay.y - 20.0f }, 13.0f);
     {
         auto mapNames = MapRegistry::GetInstance().GetMapNames();
         std::string currentMap = NetworkManager::GetInstance().selectedMapName;
@@ -719,8 +855,11 @@ void LobbyScreen::Draw(RenderTexture2D target) {
         if (hoverPrevMap > 0.01f) prevFill = Fade(UiTheme::ButtonHover(), hoverPrevMap);
         DrawRectangleRec(prevMapBtn, prevFill);
         DrawRectangleLinesEx(prevMapBtn, 1.5f, Fade(UiTheme::PanelBorder(), 0.6f + hoverPrevMap * 0.4f));
-        Vector2 centerPrev = { prevMapBtn.x + prevMapBtn.width/2, prevMapBtn.y + prevMapBtn.height/2 };
-        DrawTriangle({centerPrev.x - 4, centerPrev.y}, {centerPrev.x + 4, centerPrev.y - 6}, {centerPrev.x + 4, centerPrev.y + 6}, isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted());
+                Color prevArrowColor = isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted();
+                float prevArrowX = prevMapBtn.x + prevMapBtn.width * 0.5f;
+                float prevArrowY = prevMapBtn.y + prevMapBtn.height * 0.5f;
+                DrawLineEx({ prevArrowX + 4.0f, prevArrowY - 6.0f }, { prevArrowX - 3.0f, prevArrowY }, 2.0f, prevArrowColor);
+                DrawLineEx({ prevArrowX - 3.0f, prevArrowY }, { prevArrowX + 4.0f, prevArrowY + 6.0f }, 2.0f, prevArrowColor);
 
         // Center display
         DrawRectangleRec(mapDisplay, Fade(UiTheme::ButtonIdle(), 0.15f));
@@ -736,40 +875,17 @@ void LobbyScreen::Draw(RenderTexture2D target) {
         if (hoverNextMap > 0.01f) nextFill = Fade(UiTheme::ButtonHover(), hoverNextMap);
         DrawRectangleRec(nextMapBtn, nextFill);
         DrawRectangleLinesEx(nextMapBtn, 1.5f, Fade(UiTheme::PanelBorder(), 0.6f + hoverNextMap * 0.4f));
-        Vector2 centerNext = { nextMapBtn.x + nextMapBtn.width/2, nextMapBtn.y + nextMapBtn.height/2 };
-        DrawTriangle({centerNext.x + 4, centerNext.y}, {centerNext.x - 4, centerNext.y + 6}, {centerNext.x - 4, centerNext.y - 6}, isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted());
+                Color nextArrowColor = isHost ? UiTheme::TextPrimary() : UiTheme::TextMuted();
+                float nextArrowX = nextMapBtn.x + nextMapBtn.width * 0.5f;
+                float nextArrowY = nextMapBtn.y + nextMapBtn.height * 0.5f;
+                DrawLineEx({ nextArrowX - 4.0f, nextArrowY - 6.0f }, { nextArrowX + 3.0f, nextArrowY }, 2.0f, nextArrowColor);
+                DrawLineEx({ nextArrowX + 3.0f, nextArrowY }, { nextArrowX - 4.0f, nextArrowY + 6.0f }, 2.0f, nextArrowColor);
 
         // Big Map Preview
-        DrawRectangleRec(mapPreview, Color{ 18, 20, 28, 200 });
+        DrawRectangleRec(mapPreview, Color{ 10, 14, 20, 235 });
         
         MapData* md = MapRegistry::GetInstance().GetMap(currentMap);
         if (md && md->tmxMap) {
-            // Update cache if map changed
-            if (cachedPreviewName != currentMap) {
-                BeginTextureMode(cachedPreview);
-                ClearBackground(Color{ 18, 20, 28, 255 });
-                
-                float scaleX = mapPreview.width  / (float)md->pixelWidth;
-                float scaleY = mapPreview.height / (float)md->pixelHeight;
-                float scale  = scaleX < scaleY ? scaleX : scaleY;
-
-                Camera2D miniCam = {};
-                miniCam.zoom     = scale;
-                miniCam.target   = { 0.0f, 0.0f };
-                miniCam.offset   = { (mapPreview.width - md->pixelWidth * scale) / 2.0f, 
-                                     (mapPreview.height - md->pixelHeight * scale) / 2.0f };
-                miniCam.rotation = 0.0f;
-
-                BeginMode2D(miniCam);
-                // Draw full map
-                Rectangle mapSpaceVp = { 0, 0, (float)md->pixelWidth, (float)md->pixelHeight };
-                DrawTMX(md->tmxMap, &miniCam, &mapSpaceVp, 0, 0, WHITE);
-                EndMode2D();
-                
-                EndTextureMode();
-                cachedPreviewName = currentMap;
-            }
-
             // Draw the cached texture (flip Y because OpenGL render textures are inverted)
             Rectangle sourceRec = { 0.0f, 0.0f, (float)cachedPreview.texture.width, -(float)cachedPreview.texture.height };
             DrawTextureRec(cachedPreview.texture, sourceRec, { mapPreview.x, mapPreview.y }, WHITE);
@@ -778,11 +894,18 @@ void LobbyScreen::Draw(RenderTexture2D target) {
                        { mapPreview.x + 140, mapPreview.y + 40 }, 12.0f, 1.0f, UiTheme::TextMuted());
         }
         
-        DrawRectangleLinesEx(mapPreview, 1.5f, UiTheme::PanelBorder());
+        DrawRectangleLinesEx(mapPreview, 1.5f, Fade(UiTheme::SkyAccent(), 0.75f));
     }
+    // Dynamic Separator between map preview bottom and mode section
+    DrawLineEx({ 752.0f, mapPreview.y + mapPreview.height + 8.0f }, { 1226.0f, mapPreview.y + mapPreview.height + 8.0f },
+               1.0f, Fade(UiTheme::PanelBorder(), 0.40f));
 
     DrawModeSelector();
     DrawChipRows();
+
+    // Dynamic Separator between chip rows and action buttons
+    DrawLineEx({ 752.0f, chipLimit[0].y + chipLimit[0].height + 10.0f }, { 1226.0f, chipLimit[0].y + chipLimit[0].height + 10.0f },
+               1.0f, Fade(UiTheme::PanelBorder(), 0.40f));
 
     bool localReady = NetworkManager::GetInstance().IsLocalPlayerReady();
     bool canStart = isHost && NetworkManager::GetInstance().AllPlayersReady();
@@ -795,23 +918,38 @@ void LobbyScreen::Draw(RenderTexture2D target) {
         Ui::DrawMenuButton(startBtn, menuFont, "START MATCH  (SPACE)",
                            hoverStart, true, canStart);
 
-        DrawTextEx(menuFont, "SHARE", { 780, copyBtn.y - 14 }, 12.0f, 1.0f, UiTheme::TextMuted());
-        Ui::DrawMenuButton(copyBtn, menuFont, "COPY LAN ADDRESS  (C)",
-                           hoverCopy, false, !lanAddress.empty());
-
+        DrawTextEx(menuFont, "SHARE", { 758, copyBtn.y - 18 }, 12.0f, 1.0f, UiTheme::TextMuted());
         if (!lanAddress.empty()) {
+            Vector2 addressSize = MeasureTextEx(menuFont, lanAddress.c_str(), 11.0f, 1.0f);
             DrawTextEx(menuFont, lanAddress.c_str(),
-                       { 780, copyBtn.y + copyBtn.height + 6 }, 12.0f, 1.0f, UiTheme::SkyAccent());
+                       { copyBtn.x + copyBtn.width - addressSize.x, copyBtn.y - 18 },
+                       11.0f, 1.0f, UiTheme::SkyAccent());
         }
-        DrawTextEx(menuFont, "Or share your playit.gg tunnel",
-                   { 780, copyBtn.y + copyBtn.height + 24 }, 11.0f, 1.0f, UiTheme::TextMuted());
+        Ui::DrawMenuButton(copyBtn, menuFont, "COPY ADDRESS  (C)",
+                           hoverCopy, false, !lanAddress.empty());
     } else {
         DrawTextEx(menuFont, localReady ? "Waiting for host to start..." : "Press Ready when you're set",
-                   { 780, readyBtn.y + readyBtn.height + 12 }, 14.0f, 1.0f, UiTheme::TextMuted());
+                   { 758, readyBtn.y + readyBtn.height + 12 }, 14.0f, 1.0f, UiTheme::TextMuted());
     }
 
-    // Back button like in OnlineMenu (top-left)
-    Rectangle globalBackBtn = { 28.0f, VIRTUAL_HEIGHT - 60.0f, 150.0f, 42.0f };
+    EndMode2D();
+    EndScissorMode();
+
+    if (optionScrollMax > 0.0f) {
+        float trackX = optionViewport.x + optionViewport.width - 7.0f;
+        float trackY = optionViewport.y + 8.0f;
+        float trackH = optionViewport.height - 16.0f;
+        float thumbH = trackH * optionViewport.height /
+                       (optionViewport.height + optionScrollMax);
+        float thumbY = trackY + (trackH - thumbH) * optionScroll / optionScrollMax;
+        DrawRectangle((int)trackX, (int)trackY, 3, (int)trackH,
+                      Fade(UiTheme::PanelBorder(), 0.35f));
+        DrawRectangle((int)trackX, (int)thumbY, 3, (int)thumbH,
+                      Fade(UiTheme::SkyAccent(), 0.75f));
+    }
+
+    // Keep the back button in the top margin, outside the lobby shell.
+    Rectangle globalBackBtn = { 28.0f, 4.0f, 168.0f, 32.0f };
     Ui::DrawMenuButton(globalBackBtn, menuFont, "BACK", hoverGlobalBack, false, true);
 
     EndTextureMode();

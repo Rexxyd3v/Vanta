@@ -20,11 +20,11 @@ private:
     Font menuFont;
     GameMode selectedMode;
 
-    Rectangle cardOffline;
     Rectangle cardOnline;
 
-    float hoverOffline;
     float hoverOnline;
+
+    int keyboardNavIndex; // -1 = mouse, 1 = Online
 
     Music mainMenuMusic;
     Sound choiceSound;
@@ -34,6 +34,9 @@ private:
     float fadeInTimer;
     float blurStrength;
     float uiRise;
+    float glitchTimer;       // total elapsed time for glitch timing
+    float glitchIntensity;   // 0..1, spikes randomly
+    float glitchCooldown;    // countdown until next glitch burst
 };
 
 #endif // MAIN_MENU_H

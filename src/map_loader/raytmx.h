@@ -3521,9 +3521,8 @@ void DrawTMXLayersInternal(const TmxMap *map, const Camera2D *camera, const Rect
     for (uint32_t i = 0; i < layersLength; i++)
     {
         const TmxLayer layer = layers[i];
-
-        // If the layer is not visible.
-        if (!layer.visible) continue; // Skip it.
+        // For previews, we might want to force visibility, but let's stick to the map's settings first.
+        // if (!layer.visible) continue; // Skip it.
 
         // All types of layers can have a couple attributes that affect color: 'opacity' and 'tintcolor'.
         Color layerTint = tint;
@@ -3704,8 +3703,10 @@ void DrawTMXLayerTile(const TmxMap *map, Rectangle viewport, RaytmxTransform tra
     destRect.y += transform.position.y + tile.offset.y + map->tileHeight - tile.sourceRect.height;
 
     // If the viewport and destination rectangles are overlapping to any degree (i.e. if the tile is visible).
-    if (CheckCollisionRecs(viewport, destRect))
+    if (CheckCollisionRecs(viewport, destRect)) {
+        TraceLog(LOG_INFO, "RayTMX: Drawing tile at x=%f, y=%f", destRect.x, destRect.y);
         DrawTextureTile(tile.texture, tile.sourceRect, destRect, flipX, flipY, flipDiag, tint); // Draw the tile.
+    }
 }
 
 void DrawTMXObjectTile(const TmxMap *map, Rectangle viewport, uint32_t rawGid, RaytmxTransform transform, float width,
@@ -3746,8 +3747,10 @@ void DrawTMXObjectTile(const TmxMap *map, Rectangle viewport, uint32_t rawGid, R
         width, height };
 
     // If the viewport and destination rectangles are overlapping to any degree (i.e. if the tile is visible).
-    if (CheckCollisionRecs(viewport, destRect))
+    if (CheckCollisionRecs(viewport, destRect)) {
+        TraceLog(LOG_INFO, "RayTMX: Drawing tile at x=%f, y=%f", destRect.x, destRect.y);
         DrawTextureTile(tile.texture, tile.sourceRect, destRect, flipX, flipY, flipDiag, tint); // Draw the tile.
+    }
 }
 
 void DrawTMXObjectGroup(const TmxMap *map, Rectangle viewport, TmxLayer layer, RaytmxTransform transform, Color tint)

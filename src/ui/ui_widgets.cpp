@@ -94,30 +94,168 @@ bool DrawMenuButton(Rectangle bounds, const Font& font, const char* label,
     return hovered;
 }
 
+void DrawTacticalFrame(float alpha, const Font* font) {
+    if (alpha <= 0.0f) return;
+    Color bracketCol = Fade(UiTheme::AccentGold(), alpha * 0.45f);
+    Color lineCol    = Fade(UiTheme::PanelBorder(), alpha * 0.35f);
+    Color textCol    = Fade(UiTheme::TextMuted(), alpha * 0.7f);
+
+    float pad = 24.0f;
+    float len = 32.0f;
+    float thickness = 2.0f;
+
+    // Top-Left corner bracket
+    DrawLineEx({ pad, pad }, { pad + len, pad }, thickness, bracketCol);
+    DrawLineEx({ pad, pad }, { pad, pad + len }, thickness, bracketCol);
+    DrawLineEx({ pad - 4.0f, pad }, { pad + 4.0f, pad }, 1.0f, bracketCol);
+    DrawLineEx({ pad, pad - 4.0f }, { pad, pad + 4.0f }, 1.0f, bracketCol);
+
+    // Top-Right corner bracket
+    DrawLineEx({ (float)VIRTUAL_WIDTH - pad - len, pad }, { (float)VIRTUAL_WIDTH - pad, pad }, thickness, bracketCol);
+    DrawLineEx({ (float)VIRTUAL_WIDTH - pad, pad }, { (float)VIRTUAL_WIDTH - pad, pad + len }, thickness, bracketCol);
+
+    // Bottom-Left corner bracket
+    DrawLineEx({ pad, (float)VIRTUAL_HEIGHT - pad }, { pad + len, (float)VIRTUAL_HEIGHT - pad }, thickness, bracketCol);
+    DrawLineEx({ pad, (float)VIRTUAL_HEIGHT - pad - len }, { pad, (float)VIRTUAL_HEIGHT - pad }, thickness, bracketCol);
+
+    // Bottom-Right corner bracket
+    DrawLineEx({ (float)VIRTUAL_WIDTH - pad - len, (float)VIRTUAL_HEIGHT - pad }, { (float)VIRTUAL_WIDTH - pad, (float)VIRTUAL_HEIGHT - pad }, thickness, bracketCol);
+    DrawLineEx({ (float)VIRTUAL_WIDTH - pad, (float)VIRTUAL_HEIGHT - pad - len }, { (float)VIRTUAL_WIDTH - pad, (float)VIRTUAL_HEIGHT - pad }, thickness, bracketCol);
+
+    // Top Header Status Line
+    DrawLineEx({ 60.0f, 44.0f }, { (float)VIRTUAL_WIDTH - 60.0f, 44.0f }, 1.0f, lineCol);
+
+    if (font && font->texture.id != 0) {
+        // Status labels removed.
+    }
+}
+
+void DrawBadgeTag(Vector2 pos, const char* text, Color bg, Color textCol, const Font& font, float fontSize) {
+    if (!text || !text[0]) return;
+    Vector2 sz = MeasureTextEx(font, text, fontSize, 1.0f);
+    Rectangle bgRec = { pos.x, pos.y, sz.x + 14.0f, sz.y + 6.0f };
+    DrawRectangleRec(bgRec, bg);
+    DrawRectangleLinesEx(bgRec, 1.0f, Fade(textCol, 0.45f));
+    DrawTextEx(font, text, { pos.x + 7.0f, pos.y + 3.0f }, fontSize, 1.0f, textCol);
+}
+
 bool DrawModeCard(Rectangle bounds, const Font& font,
-                  const char* title, const char* subtitle, float hoverT) {
+                  const char* title, const char* subtitle, float hoverT,
+                  const char* badgeTag, int iconType, Color accentColor) {
     Vector2 mouse = RemapMouseToVirtual();
     bool hovered = CheckCollisionPointRec(mouse, bounds);
 
     float lift = hoverT * 6.0f;
     Rectangle draw = { bounds.x, bounds.y - lift, bounds.width, bounds.height };
 
+    // Outer glow halo when hovered
+    if (hoverT > 0.01f) {
+        Rectangle glowRec = { draw.x - 5.0f, draw.y - 5.0f, draw.width + 10.0f, draw.height + 10.0f };
+        DrawRectangleRec(glowRec, Fade(accentColor, hoverT * 0.12f));
+        DrawRectangleLinesEx(glowRec, 1.5f, Fade(accentColor, hoverT * 0.35f));
+    }
+
+    // Glass panel base
     DrawGlassPanel(draw, 0.92f + hoverT * 0.08f);
 
-    Color accent = Fade(UiTheme::AccentGold(), 0.25f + hoverT * 0.75f);
-    DrawRectangle((int)draw.x, (int)draw.y, 5, (int)draw.height, accent);
-    DrawRectangleLinesEx(draw, 2.0f, Fade(UiTheme::AccentGold(), 0.2f + hoverT * 0.6f));
+    // Left accent rail
+    float railW = 6.0f + hoverT * 3.0f;
+    Color railColor = Fade(accentColor, 0.55f + hoverT * 0.45f);
+    DrawRectangle((int)draw.x, (int)draw.y, (int)railW, (int)draw.height, railColor);
 
-    float titleSize = 32.0f;
+    // Border
+    Color borderColor = Fade(accentColor, 0.3f + hoverT * 0.7f);
+    DrawRectangleLinesEx(draw, 2.0f, borderColor);
+
+    // Top-right corner cut accent
+    DrawLineEx({ draw.x + draw.width - 22.0f, draw.y },
+               { draw.x + draw.width, draw.y + 22.0f },
+               2.0f, borderColor);
+
+    // Reserve a right lane for metadata and the icon.
+    float contentLeft = draw.x + 30.0f;
+    float contentRight = draw.x + draw.width - 150.0f;
+    float laneX = draw.x + draw.width - 116.0f;
+    DrawLineEx({ laneX, draw.y + 22.0f }, { laneX, draw.y + draw.height - 22.0f },
+               1.0f, Fade(accentColor, 0.2f + hoverT * 0.25f));
+
+    // Tactical Badge Tag on top right
+    if (badgeTag && badgeTag[0]) {
+        Vector2 bsz = MeasureTextEx(font, badgeTag, 11.0f, 1.0f);
+        float badgeX = draw.x + draw.width - bsz.x - 24.0f;
+        float badgeY = draw.y + 13.0f;
+        Color badgeBg = Fade(accentColor, 0.18f + hoverT * 0.18f);
+        DrawBadgeTag({ badgeX, badgeY }, badgeTag, badgeBg, accentColor, font, 11.0f);
+    }
+
+        // Small index marker gives the two choices a visual rhythm without competing
+        // with the title and keeps the content column clearly separated from the icon.
+        const char* indexText = iconType == 1 ? "01" : "02";
+        DrawTextEx(font, indexText, { contentLeft, draw.y + draw.height - 28.0f },
+                   11.0f, 1.0f, Fade(accentColor, 0.72f + hoverT * 0.28f));
+
+    // Procedural Icon on the right side of the card
+    if (iconType > 0) {
+        float iconCx = draw.x + draw.width - 58.0f;
+        float iconCy = draw.y + draw.height * 0.5f + 4.0f;
+        Color iconCol = Fade(accentColor, 0.5f + hoverT * 0.5f);
+
+        if (iconType == 1) { // Crosshair icon for Offline Arena
+            float r1 = 18.0f;
+            DrawCircleLines((int)iconCx, (int)iconCy, r1, iconCol);
+            DrawCircleLines((int)iconCx, (int)iconCy, r1 * 0.45f, Fade(iconCol, 0.75f));
+            DrawCircle((int)iconCx, (int)iconCy, 3.0f, iconCol);
+            // Crosshair tick marks
+            DrawLineEx({ iconCx - r1 - 6.0f, iconCy }, { iconCx - r1 + 3.0f, iconCy }, 2.0f, iconCol);
+            DrawLineEx({ iconCx + r1 - 3.0f, iconCy }, { iconCx + r1 + 6.0f, iconCy }, 2.0f, iconCol);
+            DrawLineEx({ iconCx, iconCy - r1 - 6.0f }, { iconCx, iconCy - r1 + 3.0f }, 2.0f, iconCol);
+            DrawLineEx({ iconCx, iconCy + r1 - 3.0f }, { iconCx, iconCy + r1 + 6.0f }, 2.0f, iconCol);
+        } else if (iconType == 2) { // Network / Signal icon for Online Lobby
+            float r1 = 16.0f;
+            DrawCircle((int)iconCx, (int)iconCy, 4.0f, iconCol);
+            DrawCircleLines((int)iconCx, (int)iconCy, 10.0f, Fade(iconCol, 0.85f));
+            DrawCircleLines((int)iconCx, (int)iconCy, 18.0f, Fade(iconCol, 0.55f));
+            // Network node arms
+            DrawLineEx({ iconCx - 14.0f, iconCy - 10.0f }, { iconCx, iconCy }, 1.5f, Fade(iconCol, 0.65f));
+            DrawLineEx({ iconCx + 14.0f, iconCy - 10.0f }, { iconCx, iconCy }, 1.5f, Fade(iconCol, 0.65f));
+            DrawLineEx({ iconCx, iconCy + 16.0f }, { iconCx, iconCy }, 1.5f, Fade(iconCol, 0.65f));
+            DrawCircle((int)(iconCx - 14.0f), (int)(iconCy - 10.0f), 2.5f, iconCol);
+            DrawCircle((int)(iconCx + 14.0f), (int)(iconCy - 10.0f), 2.5f, iconCol);
+            DrawCircle((int)iconCx, (int)(iconCy + 16.0f), 2.5f, iconCol);
+        }
+    }
+
+    // Title
+    float titleSize = 30.0f;
+    const float contentWidth = contentRight - contentLeft;
     Vector2 tsz = MeasureTextEx(font, title, titleSize, 1.0f);
+    if (tsz.x > contentWidth) {
+        titleSize *= contentWidth / tsz.x;
+        tsz = MeasureTextEx(font, title, titleSize, 1.0f);
+    }
+    // Subtle drop shadow for title
     DrawTextEx(font, title,
-               { draw.x + 28.0f, draw.y + 22.0f },
+               { contentLeft + 1.0f, draw.y + 23.0f },
+               titleSize, 1.0f, Fade(BLACK, 0.65f));
+    DrawTextEx(font, title,
+               { contentLeft, draw.y + 22.0f },
                titleSize, 1.0f, UiTheme::TextPrimary());
 
-    float subSize = 16.0f;
+    // Subtitle
+    float subSize = 15.0f;
+    Vector2 subtitleSize = MeasureTextEx(font, subtitle, subSize, 1.0f);
+    if (subtitleSize.x > contentWidth) {
+        subSize *= contentWidth / subtitleSize.x;
+    }
     DrawTextEx(font, subtitle,
-               { draw.x + 28.0f, draw.y + 22.0f + tsz.y + 6.0f },
+               { contentLeft, draw.y + 22.0f + tsz.y + 8.0f },
                subSize, 1.0f, UiTheme::TextMuted());
+
+    // Bottom accent edge glow on hover
+    if (hoverT > 0.01f) {
+        DrawRectangle((int)draw.x, (int)(draw.y + draw.height - 2.0f),
+                      (int)draw.width, 2, Fade(accentColor, hoverT * 0.85f));
+    }
 
     return hovered;
 }

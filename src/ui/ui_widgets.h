@@ -16,9 +16,14 @@ void DrawVignette(float strength = 0.55f);
 
 void DrawGlassPanel(Rectangle bounds, float alpha = 1.0f);
 
+void DrawTacticalFrame(float alpha = 1.0f, const Font* font = nullptr);
+
+void DrawBadgeTag(Vector2 pos, const char* text, Color bg, Color textCol, const Font& font, float fontSize = 11.0f);
+
 bool DrawMenuButton(Rectangle bounds, const Font& font, const char* label,float hoverT, bool primary = false, bool enabled = true);
 
-bool DrawModeCard(Rectangle bounds, const Font& font,const char* title, const char* subtitle, float hoverT);
+bool DrawModeCard(Rectangle bounds, const Font& font, const char* title, const char* subtitle, float hoverT,
+                  const char* badgeTag = nullptr, int iconType = 0, Color accentColor = { 232, 188, 96, 255 });
 
 void DrawTextField(Rectangle bounds, const Font& font, const char* text,bool focused, float caretBlink);
 

@@ -292,7 +292,9 @@ void MenuBackground::TickWorld(float deltaTime) {
         }
     }
 
-    // --- World collision (rocks + tree trunks) ---
+    // --- Apply horizontal velocity + resolve world collisions ---
+    // UpdateAI sets velocity but does NOT move position (for demo mode).
+    // We apply the movement here, then immediately push characters out of walls.
     auto resolveWorld = [&](Character* c) {
         if (!c) return;
         Rectangle cb = c->GetCollisionBounds();
@@ -313,6 +315,11 @@ void MenuBackground::TickWorld(float deltaTime) {
                 }
             }
         }
+        // Clamp inside world bounds
+        Vector2 p = c->GetPosition();
+        p.x = fclamp(p.x, 80.0f, (float)WORLD_WIDTH  - 80.0f);
+        p.y = fclamp(p.y, 80.0f, (float)WORLD_HEIGHT - 80.0f);
+        c->SetPosition(p);
     };
     for (auto b : bots) resolveWorld(b);
 

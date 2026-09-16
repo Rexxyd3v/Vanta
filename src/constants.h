@@ -13,7 +13,6 @@
 
 enum class GameMode {
     NONE,
-    OFFLINE,
     ONLINE
 };
 

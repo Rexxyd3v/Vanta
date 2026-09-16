@@ -56,7 +56,6 @@ private:
     GameMode currentMode;
     Player* player;
     Player* player2;
-    std::vector<BotEnemy*> offlineBots;       // Offline AI opponents
     std::vector<RemotePlayer*> remotePlayers; // Online opponents
 
     // Elimination / round-flow state (online host-authoritative, mirrored on clients).
@@ -66,6 +65,10 @@ private:
     float matchEndTimer       = 0.0f;
     int   currentRoundNumber  = 0;
     int   lastRoundWinnerID   = 0;
+    Vector2 flagPosition{};
+    Vector2 teamBasePositions[3]{};
+    Character* flagCarrier = nullptr;
+    int flagTeam = 0;
 
     // Pause menu state
     bool isPaused = false;
@@ -105,7 +108,8 @@ private:
     void  CheckCollisions();
     Character* GetNearestEnemy(Vector2 pos);
     Vector2 GetFarSpawnPoint();
-    Character* GetNearestTargetForBot(BotEnemy* b);
+    int GetCharacterTeam(const Character* c) const;
+    Character* FindFlagCarrier() const;
 };
 
 #endif

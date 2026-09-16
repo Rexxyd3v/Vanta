@@ -2,30 +2,43 @@
 #include "../network/network_manager.h"
 #include "../ui/ui_widgets.h"
 #include "../ui/ui_theme.h"
+#include <cmath>
+#include <cstdlib>
+
+// Simple seeded noise helpers — no external deps
+static float RandFloat(int seed) {
+    unsigned int n = (unsigned int)(seed * 1664525u + 1013904223u);
+    n ^= n >> 16;
+    return (float)(n & 0xFFFF) / 65535.0f;
+}
 
 MainMenuScreen::MainMenuScreen() {
     menuFont = LoadFontEx("assets/fonts/BruceForeverRegular-X3jd2.ttf", 80, nullptr, 0);
-    if (menuFont.texture.id == 0) {
-        menuFont = GetFontDefault();
-    }
+    if (menuFont.texture.id == 0) menuFont = GetFontDefault();
 
-    selectedMode = GameMode::NONE;
-    hoverOffline = 0.0f;
-    hoverOnline = 0.0f;
-    uiRise = 0.0f;
+    selectedMode     = GameMode::NONE;
+    hoverOnline      = 0.0f;
+    uiRise           = 0.0f;
+    keyboardNavIndex = -1;
+    glitchTimer      = 0.0f;
+    glitchIntensity  = 0.0f;
+    glitchCooldown   = 1.5f; // first glitch after 1.5s
 
-    cardOffline = { 720.0f, 250.0f, 480.0f, 110.0f };
-    cardOnline  = { 720.0f, 390.0f, 480.0f, 110.0f };
+    float cardWidth  = 380.0f;
+    float cardHeight = 52.0f;
+    cardOnline = {
+        ((float)VIRTUAL_WIDTH  - cardWidth)  * 0.5f,
+        ((float)VIRTUAL_HEIGHT - cardHeight) * 0.5f + 80.0f,
+        cardWidth, cardHeight
+    };
 
     int skinIdx = NetworkManager::GetInstance().localSkinIndex;
     if (skinIdx < 1 || skinIdx > 4) skinIdx = 1;
     background = new MenuBackground(skinIdx, MenuBackground::BackdropStyle::CINEMATIC_BEACH);
 
-    // Start fully black — background pre-warms invisibly for ~0.6s so bots are
-    // already mid-battle when the scene fades in. Prevents the jarring snap.
-    fadeInTimer = -0.6f;
-    blurStrength = 1.0f;   // start fully blurred, ease to target
-    uiRise = 0.0f;
+    fadeInTimer  = -0.6f;
+    blurStrength =  1.0f;
+    uiRise       =  0.0f;
 
     mainMenuMusic = LoadMusicStream("assets/sounds/MAINSOUNDTRACK.wav");
     SetMusicVolume(mainMenuMusic, 0.0f);
@@ -35,15 +48,8 @@ MainMenuScreen::MainMenuScreen() {
 }
 
 MainMenuScreen::~MainMenuScreen() {
-    if (background) {
-        delete background;
-        background = nullptr;
-    }
-
-    if (menuFont.texture.id != GetFontDefault().texture.id) {
-        UnloadFont(menuFont);
-    }
-
+    if (background) { delete background; background = nullptr; }
+    if (menuFont.texture.id != GetFontDefault().texture.id) UnloadFont(menuFont);
     UnloadSound(choiceSound);
     UnloadMusicStream(mainMenuMusic);
 }
@@ -51,45 +57,91 @@ MainMenuScreen::~MainMenuScreen() {
 bool MainMenuScreen::Update(float deltaTime) {
     UpdateMusicStream(mainMenuMusic);
 
-    // Advance timer (starts at -0.6, crosses 0, then climbs to 1.0)
     fadeInTimer += deltaTime / 1.6f;
     if (fadeInTimer > 1.0f) fadeInTimer = 1.0f;
 
-    // Music and visuals only start once we cross zero (pre-warm phase is silent)
     float visibleAlpha = (fadeInTimer < 0.0f) ? 0.0f : fadeInTimer;
-    SetMusicVolume(mainMenuMusic, visibleAlpha);
+    SetMusicVolume(mainMenuMusic, visibleAlpha * 0.85f);
 
-    blurStrength = Ui::Approach(blurStrength, 0.42f, 0.35f, deltaTime);
-    uiRise = Ui::Approach(uiRise, 1.0f, 2.2f, deltaTime);
+    blurStrength = Ui::Approach(blurStrength, 0.38f, 0.30f, deltaTime);
+    uiRise       = Ui::Approach(uiRise,       1.0f,  2.2f,  deltaTime);
+    glitchTimer += deltaTime;
 
-    if (background) {
-        background->Update(deltaTime, fadeInTimer);
+    // Glitch burst logic — fires occasionally, decays fast
+    glitchCooldown -= deltaTime;
+    if (glitchCooldown <= 0.0f) {
+        glitchIntensity = 0.7f + RandFloat((int)(glitchTimer * 1000.0f)) * 0.3f;
+        // next burst in 2–5 seconds
+        glitchCooldown  = 2.0f + RandFloat((int)(glitchTimer * 997.0f)) * 3.0f;
     }
+    // Decay intensity quickly
+    glitchIntensity = Ui::Approach(glitchIntensity, 0.0f, 5.5f, deltaTime);
+
+    if (background) background->Update(deltaTime, fadeInTimer);
+
+    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) ||
+        IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S))
+        keyboardNavIndex = 1;
+
+    Vector2 mouseDelta = GetMouseDelta();
+    if (fabsf(mouseDelta.x) > 1.0f || fabsf(mouseDelta.y) > 1.0f)
+        keyboardNavIndex = -1;
 
     Vector2 mouse = Ui::RemapMouseToVirtual();
-    bool hOff = CheckCollisionPointRec(mouse, cardOffline);
-    bool hOn  = CheckCollisionPointRec(mouse, cardOnline);
-    hoverOffline = Ui::Approach(hoverOffline, hOff ? 1.0f : 0.0f, 8.0f, deltaTime);
-    hoverOnline  = Ui::Approach(hoverOnline,  hOn  ? 1.0f : 0.0f, 8.0f, deltaTime);
+    bool hOn = CheckCollisionPointRec(mouse, cardOnline) || (keyboardNavIndex == 1);
+    hoverOnline = Ui::Approach(hoverOnline, hOn ? 1.0f : 0.0f, 10.0f, deltaTime);
 
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        if (hOff) {
-            selectedMode = GameMode::OFFLINE;
-            PlaySound(choiceSound);
-            return false;
-        }
-        if (hOn) {
-            selectedMode = GameMode::ONLINE;
-            PlaySound(choiceSound);
-            return false;
-        }
+    bool confirm = IsMouseButtonPressed(MOUSE_LEFT_BUTTON) ||
+                   (keyboardNavIndex >= 0 && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)));
+    if (confirm && hOn) {
+        selectedMode = GameMode::ONLINE;
+        PlaySound(choiceSound);
+        return false;
     }
 
     return true;
 }
 
+// Draw the title text with RGB-split glitch slices
+static void DrawGlitchText(const Font& font, const char* text,
+                            Vector2 pos, float fontSize, float spacing,
+                            Color baseColor, float intensity, float seed) {
+    if (intensity < 0.01f) {
+        DrawTextEx(font, text, pos, fontSize, spacing, baseColor);
+        return;
+    }
+
+    // Red channel offset
+    float rx = (RandFloat((int)(seed * 3.1f)) - 0.5f) * 14.0f * intensity;
+    float ry = (RandFloat((int)(seed * 7.3f)) - 0.5f) *  2.0f * intensity;
+    DrawTextEx(font, text, { pos.x + rx, pos.y + ry },
+               fontSize, spacing, Fade({ 255, 30, 30, 180 }, intensity * 0.8f));
+
+    // Cyan/blue channel offset (opposite direction)
+    float cx = (RandFloat((int)(seed * 5.7f)) - 0.5f) * 12.0f * intensity;
+    float cy = (RandFloat((int)(seed * 2.9f)) - 0.5f) *  2.0f * intensity;
+    DrawTextEx(font, text, { pos.x - cx, pos.y - cy },
+               fontSize, spacing, Fade({ 30, 220, 255, 160 }, intensity * 0.7f));
+
+    // Main text on top — slightly jittered
+    float jx = (RandFloat((int)(seed * 11.0f)) - 0.5f) * 3.0f * intensity;
+    DrawTextEx(font, text, { pos.x + jx, pos.y }, fontSize, spacing, baseColor);
+
+    // Horizontal slice glitch — one or two random rows displaced
+    if (intensity > 0.4f) {
+        float sliceY  = pos.y + RandFloat((int)(seed * 4.1f)) * fontSize;
+        float sliceH  = 8.0f + RandFloat((int)(seed * 9.2f)) * 12.0f;
+        float sliceOX = (RandFloat((int)(seed * 6.6f)) - 0.5f) * 22.0f * intensity;
+
+        BeginScissorMode((int)(pos.x + sliceOX - 4), (int)sliceY,
+                         (int)(MeasureTextEx(font, text, fontSize, spacing).x + 8), (int)sliceH);
+        DrawTextEx(font, text, { pos.x + sliceOX, pos.y },
+                   fontSize, spacing, Fade(UiTheme::AccentGold(), intensity * 0.9f));
+        EndScissorMode();
+    }
+}
+
 void MainMenuScreen::Draw(RenderTexture2D target) {
-    // Clamp to [0,1] for all visual operations
     float visibleAlpha = (fadeInTimer < 0.0f) ? 0.0f : fadeInTimer;
 
     if (background) {
@@ -102,46 +154,99 @@ void MainMenuScreen::Draw(RenderTexture2D target) {
 
     BeginTextureMode(target);
 
-    // Full black overlay during pre-warm, then fades out as visibleAlpha climbs
+    // Fade from black
     DrawRectangle(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT,
                   Fade(BLACK, 1.0f - visibleAlpha));
 
-    Ui::DrawVignette(0.7f);
+    // Soft vignette — darkens edges, no hard line
+    Ui::DrawVignette(0.70f);
 
-    float risePx    = (1.0f - uiRise) * 24.0f;
+    // Gentle bottom darkening — smooth, no seam
+    for (int i = 0; i < 200; i++) {
+        float t = (float)i / 200.0f;
+        t = t * t; // ease-in so bottom is dark, top fades smoothly
+        DrawRectangle(0, VIRTUAL_HEIGHT - i, VIRTUAL_WIDTH, 1,
+                      Fade(BLACK, visibleAlpha * t * 0.80f));
+    }
+
+    float risePx     = (1.0f - uiRise) * 30.0f;
     float brandAlpha = visibleAlpha * uiRise;
 
-    // Left brand column
-    float titleFontSize = 92.0f;
-    float titleSpacing = 4.0f;
+    // ── TITLE ────────────────────────────────────────────────────────────
     const char* titleText = "VANTA";
+    float titleFontSize   = 128.0f;
+    float titleSpacing    = 6.0f;
     Vector2 titleSize = MeasureTextEx(menuFont, titleText, titleFontSize, titleSpacing);
+    float titleX = ((float)VIRTUAL_WIDTH  - titleSize.x) * 0.5f;
+    float titleY = 100.0f + risePx;
 
+    // Hard retro drop shadow
     DrawTextEx(menuFont, titleText,
-               { 72.0f, 170.0f + risePx },
-               titleFontSize, titleSpacing, Fade(UiTheme::TextPrimary(), brandAlpha));
+               { titleX + 6.0f, titleY + 6.0f },
+               titleFontSize, titleSpacing, Fade(BLACK, brandAlpha * 0.90f));
 
-    // Underline now matches the measured width of the title text (plus a small margin)
-    DrawRectangle(74, (int)(170.0f + titleSize.y + 6.0f + risePx),
-                  (int)titleSize.x, 4,
+    // Glitch effect on title
+    DrawGlitchText(menuFont, titleText, { titleX, titleY },
+                   titleFontSize, titleSpacing,
+                   Fade(UiTheme::TextPrimary(), brandAlpha),
+                   glitchIntensity * brandAlpha,
+                   glitchTimer);
+
+    // Thick gold underline bars
+    float barY = titleY + titleSize.y + 8.0f;
+    // Glitch: bar also shifts slightly
+    float barJitter = glitchIntensity * brandAlpha * (RandFloat((int)(glitchTimer * 13.0f)) - 0.5f) * 10.0f;
+    DrawRectangle((int)(titleX + barJitter), (int)barY, (int)titleSize.x, 6,
                   Fade(UiTheme::AccentGold(), brandAlpha));
+    DrawRectangle((int)titleX, (int)(barY + 10.0f), (int)titleSize.x, 2,
+                  Fade(UiTheme::AccentGold(), brandAlpha * 0.30f));
 
-    DrawTextEx(menuFont, "No mercy. No cover. Only the fast survive.",
-               { 74.0f, 170.0f + titleSize.y + 26.0f + risePx },
-               18.0f, 1.0f, Fade(UiTheme::TextMuted(), brandAlpha));
+    // ── PLAY ONLINE BUTTON ───────────────────────────────────────────────
+    Rectangle btn = cardOnline;
+    btn.y += risePx;
 
-    DrawTextEx(menuFont, "MAIN MENU",
-               { 74.0f, 170.0f + titleSize.y + 66.0f + risePx },
-               16.0f, 2.0f, Fade(UiTheme::AccentGold(), brandAlpha * 0.85f));
+    bool hovered = hoverOnline > 0.05f;
 
-    // Right mode cards
-    Rectangle off = cardOffline;
-    Rectangle on  = cardOnline;
-    off.y += risePx;
-    on.y  += risePx;
+    // Dark box
+    Color btnBg = hovered ? Color{ 232, 188, 96, 28 } : Color{ 6, 8, 14, 190 };
+    DrawRectangleRec(btn, Fade(btnBg, brandAlpha));
 
-    Ui::DrawModeCard(off, menuFont, "OFFLINE", "Solo arena  -  fight the bots", hoverOffline);
-    Ui::DrawModeCard(on,  menuFont, "ONLINE",  "Host or join  -  play with friends", hoverOnline);
+    // Left accent stripe
+    float railW = 4.0f + hoverOnline * 4.0f;
+    DrawRectangle((int)btn.x, (int)btn.y, (int)railW, (int)btn.height,
+                  Fade(UiTheme::AccentGold(), brandAlpha * (0.55f + hoverOnline * 0.45f)));
+
+    // Border
+    DrawRectangleLinesEx(btn, 2.0f,
+                         Fade(UiTheme::AccentGold(), brandAlpha * (0.22f + hoverOnline * 0.68f)));
+
+    // Chevron ">" cursor
+    float chevX = btn.x + 22.0f;
+    float chevY = btn.y + btn.height * 0.5f;
+    float ca    = brandAlpha * (0.45f + hoverOnline * 0.55f);
+    DrawLineEx({ chevX,        chevY - 9.0f }, { chevX + 9.0f, chevY        }, 2.5f, Fade(UiTheme::AccentGold(), ca));
+    DrawLineEx({ chevX + 9.0f, chevY        }, { chevX,        chevY + 9.0f }, 2.5f, Fade(UiTheme::AccentGold(), ca));
+
+    // Label
+    const char* btnLabel = "PLAY ONLINE";
+    float btnFontSize    = 26.0f;
+    float btnSpacing     = 2.5f;
+    Vector2 labelSz = MeasureTextEx(menuFont, btnLabel, btnFontSize, btnSpacing);
+    float labelX = btn.x + (btn.width - labelSz.x) * 0.5f + 10.0f;
+    float labelY = btn.y + (btn.height - labelSz.y) * 0.5f;
+
+    DrawTextEx(menuFont, btnLabel,
+               { labelX + 2.0f, labelY + 2.0f },
+               btnFontSize, btnSpacing, Fade(BLACK, brandAlpha * 0.75f));
+    Color labelCol = hovered ? UiTheme::AccentGold() : UiTheme::TextPrimary();
+    DrawTextEx(menuFont, btnLabel,
+               { labelX, labelY },
+               btnFontSize, btnSpacing, Fade(labelCol, brandAlpha));
+
+    // ── ESC hint — tiny, bottom-left ─────────────────────────────────────
+    DrawTextEx(menuFont, "ESC  EXIT",
+               { 36.0f, (float)VIRTUAL_HEIGHT - 32.0f },
+               12.0f, 1.5f, Fade(UiTheme::TextMuted(), brandAlpha * 0.50f));
 
     EndTextureMode();
 }

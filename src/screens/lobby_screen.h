@@ -25,6 +25,7 @@ private:
     int playerSkin;
 
     Font menuFont;
+    Sound choiceSound;
     MenuBackground* background;
     CharacterPreview* preview;
 
@@ -34,6 +35,8 @@ private:
     float hoverStart;
     float hoverCopy;
     float hoverGlobalBack;
+    float optionScroll;
+    float optionScrollMax;
 
     Rectangle shell;
     Rectangle rosterPanel;

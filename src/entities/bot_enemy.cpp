@@ -13,10 +13,10 @@ const float BOT_AGGRO_RANGE    = 800.0f;
 const float BOT_MOVE_RANGE     = 500.0f;
 
 // ---- Spectator / demo constants (menu background bots) ----
-const float DEMO_SPEED          = 185.0f;  // snappier movement
-const float DEMO_SHOOT_COOLDOWN = 0.65f;   // faster fire rate
+const float DEMO_SPEED          = 95.0f;   // slow and cinematic
+const float DEMO_SHOOT_COOLDOWN = 1.1f;    // controlled fire rate
 const float DEMO_AGGRO_RANGE    = 950.0f;
-const float DEMO_MOVE_RANGE     =  60.0f;  // always closing in
+const float DEMO_MOVE_RANGE     = 80.0f;   // stay close for action
 
 BotEnemy::BotEnemy(Vector2 startPosition, const std::string& assetPath)
     : Character(startPosition, assetPath, 0.15f), stateTimer(0.0f), isMoving(false), deathTimer(0.0f),
@@ -177,16 +177,16 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
             SetState(CharState::WALK);
         }
 
-        // --- Frequent jump (acrobatic feel) ---
+        // --- Jump occasionally (not every second) ---
         bool isOnGround = (jumpHeight <= floorHeight + 1.0f && jumpVelocity <= 0.0f);
         bool startedJump = false;
-        if (isOnGround && GetRandomValue(0, 55) == 0) { // ~1/60 chance per frame
+        if (isOnGround && GetRandomValue(0, 200) == 0) { // ~1/200 chance per frame — rare
             jumpVelocity = 420.0f;
             startedJump = true;
         }
 
-        // --- Aggressive dash toward target ---
-        if (distance > 200.0f && GetRandomValue(0, 45) == 0) { // ~1/50 per frame
+        // --- Dash only when far away ---
+        if (distance > 350.0f && GetRandomValue(0, 120) == 0) { // rare dash
             ActivateDash({ dx, dy });
         }
         // --- Shield when low health ---
@@ -194,8 +194,10 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
             ActivateShield();
         }
 
-        position.x += velocity.x * deltaTime;
-        position.y += velocity.y * deltaTime;
+        // NOTE: Do NOT directly add velocity*deltaTime here.
+        // UpdatePhysics() (called from Update()) will apply velocity to position,
+        // and then menu_background.cpp runs resolveWorld() AFTER that to push
+        // the character out of walls — this makes collision actually work.
 
         // --- Shoot aggressively if in range ---
         if (distance < DEMO_AGGRO_RANGE && currentShootCooldown <= 0.0f) {

@@ -7,7 +7,6 @@
 #include "screens/main_level.h"
 #include "screens/main_menu.h"
 #include "screens/online_menu.h"
-#include "screens/offline_menu.h"
 #include "screens/lobby_screen.h"
 #include "network/network_manager.h"
 #include "map_loader/MapRegistry.h"
@@ -67,7 +66,6 @@ int main() {
     bool isFirstScreenActive = true;
     bool isMainMenuActive = false;
     bool isOnlineMenuActive = false;
-    bool isOfflineMenuActive = false;
     bool isLobbyActive = false;
     bool isGameplayActive = false;
 
@@ -97,28 +95,9 @@ int main() {
                     MainMenuScreen* menu = static_cast<MainMenuScreen*>(currentScreen);
                     GameMode mode = menu->GetSelectedMode();
                     delete currentScreen;
-                    if (mode == GameMode::ONLINE) {
-                        currentScreen = new OnlineMenuScreen();
-                        isOnlineMenuActive = true;
-                    } else {
-                        currentScreen = new OfflineMenuScreen();
-                        isOfflineMenuActive = true;
-                    }
+                    currentScreen = new OnlineMenuScreen();
+                    isOnlineMenuActive = true;
                     isMainMenuActive = false;
-                } else if (isOfflineMenuActive) {
-                    OfflineMenuScreen* menu = static_cast<OfflineMenuScreen*>(currentScreen);
-                    if (menu->ShouldStartGame()) {
-                        delete currentScreen;
-                        currentScreen = new GameplayScreen(GameMode::OFFLINE);
-                        isOfflineMenuActive = false;
-                        isGameplayActive = true;
-                    } else {
-                        // User backed out to main menu
-                        delete currentScreen;
-                        currentScreen = new MainMenuScreen();
-                        isOfflineMenuActive = false;
-                        isMainMenuActive = true;
-                    }
                 } else if (isOnlineMenuActive) {
                     OnlineMenuScreen* menu = static_cast<OnlineMenuScreen*>(currentScreen);
                     if (menu->ShouldStartGame()) {

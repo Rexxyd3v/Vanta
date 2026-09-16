@@ -91,58 +91,6 @@ GameplayScreen::GameplayScreen(GameMode mode)
     // player2 is unused now - all opponents come via network as RemotePlayer
     player2 = nullptr;
 
-    if (currentMode == GameMode::OFFLINE) {
-        std::string charPath = "assets/Free 2D Animated Vector Game Character Sprites/Free 2D Animated Vector Game Character Sprites/Full body animated characters/";
-
-        // Build a shuffled spawn list from the map's scene data.
-        // MapRegistry auto-generates a 3x3 grid for maps with no registered builder,
-        // so this works for ANY map without hardcoded positions.
-        std::vector<Vector2> spawnPts;
-        if (currentMapData && !currentMapData->scene.spawnPoints.empty()) {
-            for (auto& sp : currentMapData->scene.spawnPoints)
-                spawnPts.push_back(sp.position);
-        } else {
-            // Ultimate fallback: distribute evenly across the world
-            spawnPts = {
-                { worldWidth * 0.15f, worldHeight * 0.15f },
-                { worldWidth * 0.50f, worldHeight * 0.15f },
-                { worldWidth * 0.85f, worldHeight * 0.15f },
-                { worldWidth * 0.15f, worldHeight * 0.50f },
-                { worldWidth * 0.50f, worldHeight * 0.50f },
-                { worldWidth * 0.85f, worldHeight * 0.50f },
-                { worldWidth * 0.15f, worldHeight * 0.85f },
-                { worldWidth * 0.50f, worldHeight * 0.85f },
-                { worldWidth * 0.85f, worldHeight * 0.85f },
-            };
-        }
-
-        // Shuffle
-        int numSpawns = (int)spawnPts.size();
-        for (int i = 0; i < numSpawns; i++) {
-            int r = GetRandomValue(0, numSpawns - 1);
-            std::swap(spawnPts[i], spawnPts[r]);
-        }
-        // Ensure at least 9 slots by wrapping
-        while ((int)spawnPts.size() < 9)
-            spawnPts.push_back(spawnPts[GetRandomValue(0, (int)spawnPts.size() - 1)]);
-
-        // Spawn 4 Character Bots
-        BotEnemy* b0 = new BotEnemy(spawnPts[0], charPath + "Char 1/with hands/"); b0->SetName("Alpha Bot"); offlineBots.push_back(b0);
-        BotEnemy* b1 = new BotEnemy(spawnPts[1], charPath + "Char 2/with hands/"); b1->SetName("Bravo Bot"); offlineBots.push_back(b1);
-        BotEnemy* b2 = new BotEnemy(spawnPts[2], charPath + "Char 3/with hands/"); b2->SetName("Charlie Bot"); offlineBots.push_back(b2);
-        BotEnemy* b3 = new BotEnemy(spawnPts[3], charPath + "Char 4/with hands/"); b3->SetName("Delta Bot"); offlineBots.push_back(b3);
-
-        // Spawn 4 Monster Enemies
-        BotEnemy* m0 = new BotEnemy(spawnPts[4], charPath + "Enemies/Enemy 1/"); m0->SetName("Ghoul"); offlineBots.push_back(m0);
-        BotEnemy* m1 = new BotEnemy(spawnPts[5], charPath + "Enemies/Enemy 2/"); m1->SetName("Zombie"); offlineBots.push_back(m1);
-        BotEnemy* m2 = new BotEnemy(spawnPts[6], charPath + "Enemies/Enemy 3/"); m2->SetName("Wraith"); offlineBots.push_back(m2);
-        BotEnemy* m3 = new BotEnemy(spawnPts[7], charPath + "Enemies/Enemy 4/"); m3->SetName("Demon"); offlineBots.push_back(m3);
-
-        // Set player name and starting position to a unique spawnpoint
-        player->SetName(NetworkManager::GetInstance().localUsername.empty() ? "You" : NetworkManager::GetInstance().localUsername);
-        player->SetPosition(spawnPts[8]);
-    }
-
     // No AI companions in Online PvP mode
     // No AI companions needed - it's PvP!
 
@@ -164,8 +112,6 @@ GameplayScreen::GameplayScreen(GameMode mode)
 
 
 
-    if (currentMode == GameMode::OFFLINE) HideCursor();
-
     // Camera2D
     camera.target   = player->GetPosition();
     camera.offset   = {VIRTUAL_WIDTH / 2.0f, VIRTUAL_HEIGHT / 2.0f};
@@ -176,10 +122,8 @@ GameplayScreen::GameplayScreen(GameMode mode)
 GameplayScreen::~GameplayScreen() {
     delete player;
     if (player2) delete player2;
-    for (auto b : offlineBots) delete b;
     for (auto r : remotePlayers) delete r;
     // healthBarFrames textures are managed by TextureManager
-    if (currentMode == GameMode::OFFLINE) ShowCursor();
 }
 
 Character* GameplayScreen::GetNearestEnemy(Vector2 pos) {
@@ -194,16 +138,6 @@ Character* GameplayScreen::GetNearestEnemy(Vector2 pos) {
         if (dist < minDist) {
             minDist = dist;
             nearest = r;
-        }
-    }
-    for (auto b : offlineBots) {
-        if (b->IsDead()) continue;
-        float dx = b->GetPosition().x - pos.x;
-        float dy = b->GetPosition().y - pos.y;
-        float dist = dx*dx + dy*dy;
-        if (dist < minDist) {
-            minDist = dist;
-            nearest = b;
         }
     }
     return nearest;
@@ -516,98 +450,9 @@ void GameplayScreen::CheckCollisions() {
                 break;
             }
         }
-
-        // Player 1 projectiles hitting offline bots
-        for (int j = 0; j < (int)offlineBots.size(); j++) {
-            BotEnemy* b = offlineBots[j];
-            if (b->IsDead()) continue;
-            Vector2 cc = { b->GetPosition().x, b->GetPosition().y - b->GetJumpHeight() };
-            if (ProjectileHitsAABB(projPos, cc)) {
-                bool wasDead = b->IsDead();
-                b->TakeDamage(playerProjs[i]->GetDamage());
-                playerProjs[i]->Deactivate();
-                if (!wasDead && b->IsDead()) {
-                    player->AddKill();
-                    b->AddDeath();
-                }
-                break;
-            }
-        }
     }
 
-    // Offline bot projectiles hitting player or other bots (Free For All)
-    for (auto b : offlineBots) {
-        if (b->IsMonster()) {
-            // Monster melee: if within contact range of target, deal damage on cooldown
-            Character* nearestTarget = nullptr;
-            float minDist = 50.0f; // melee contact range
-
-            if (!player->IsDead()) {
-                float dx = player->GetPosition().x - b->GetPosition().x;
-                float dy = player->GetPosition().y - b->GetPosition().y;
-                float d = sqrtf(dx*dx + dy*dy);
-                if (d < minDist) { minDist = d; nearestTarget = player; }
-            }
-            for (auto other : offlineBots) {
-                if (other == b || other->IsDead()) continue;
-                
-                // Monsters don't attack other monsters
-                if (other->IsMonster()) continue;
-
-                float dx = other->GetPosition().x - b->GetPosition().x;
-                float dy = other->GetPosition().y - b->GetPosition().y;
-                float d = sqrtf(dx*dx + dy*dy);
-                if (d < minDist) { minDist = d; nearestTarget = other; }
-            }
-
-            if (nearestTarget && b->GetShootCooldown() <= 0.0f) {
-                bool wasDead = nearestTarget->IsDead();
-                nearestTarget->TakeDamage(10.0f); // Nerfed monster damage from 20.0 to 10.0
-                b->SetShootCooldown(0.8f); // melee attack rate
-                if (!wasDead && nearestTarget->IsDead()) {
-                    b->AddKill();
-                    nearestTarget->AddDeath();
-                }
-            }
-        } else {
-            // Ranged bot projectiles
-            for (auto& p : b->GetProjectiles()) {
-                if (!p->IsActive()) continue;
-
-                bool hit = false;
-                if (!player->IsDead()) {
-                    Vector2 playerCC = { player->GetPosition().x, player->GetPosition().y - player->GetJumpHeight() };
-                    if (ProjectileHitsAABB(p->GetPosition(), playerCC)) {
-                        bool wasAlive = !player->IsDead();
-                        player->TakeDamage(p->GetDamage());
-                        p->Deactivate();
-                        hit = true;
-                        if (wasAlive && player->IsDead()) {
-                            b->AddKill();
-                            player->AddDeath();
-                        }
-                    }
-                }
-
-                if (hit) continue;
-
-                for (auto other : offlineBots) {
-                    if (other == b || other->IsDead()) continue;
-                    Vector2 otherCC = { other->GetPosition().x, other->GetPosition().y - other->GetJumpHeight() };
-                    if (ProjectileHitsAABB(p->GetPosition(), otherCC)) {
-                        bool wasAlive = !other->IsDead();
-                        other->TakeDamage(p->GetDamage());
-                        p->Deactivate();
-                        if (wasAlive && other->IsDead()) {
-                            b->AddKill();
-                            other->AddDeath();
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // --- ONLINE NETWORKING ---
 }
 
 bool GameplayScreen::Update(float deltaTime) {
@@ -676,36 +521,7 @@ bool GameplayScreen::Update(float deltaTime) {
 
     }
 
-    // Update bots in offline mode
-    if (currentMode == GameMode::OFFLINE) {
-        for (auto b : offlineBots) {
-            Character* target = GetNearestTargetForBot(b);
-            if (target) {
-                b->UpdateAI(deltaTime, target->GetPosition());
-            } else {
-                b->UpdateAI(deltaTime, b->GetPosition());
-            }
-            b->Update(deltaTime);
-            ResolveWorldCollision(b);
-            ClampCharacterToWorld(b);
-
-
-            if (b->ShouldRespawn()) {
-                Vector2 spawnPos = GetFarSpawnPoint();
-                b->ResetHealth(100.0f);
-                b->GetProjectiles().clear();
-                b->SetPosition(spawnPos);
-                b->ResetDeathTimer();
-            }
-        }
-
-        // Offline Player Respawn logic
-        if (player->IsDead() && IsKeyPressed(KEY_R)) {
-            player->ResetHealth(100.0f);
-            Vector2 spawnPos = GetFarSpawnPoint();
-            player->SetPosition(spawnPos);
-        }
-    }
+    // --- ONLINE NETWORKING ---
 
     // --- ONLINE NETWORKING ---
     if (currentMode == GameMode::ONLINE) {
@@ -750,7 +566,7 @@ bool GameplayScreen::Update(float deltaTime) {
             NetworkManager::GetInstance().SendPacket(&shootPkt, sizeof(shootPkt), true);
         }
 
-        // Respawn logic
+        // Online respawn is still controlled by the existing network flow.
         if (player->IsDead() && IsKeyPressed(KEY_R)) {
             int onlineMode2 = (int)NetworkManager::GetInstance().currentGameMode;
             int tid2 = (onlineMode2 == (int)OnlineGameMode::FREE_FOR_ALL) ? 0
@@ -907,13 +723,6 @@ void GameplayScreen::Draw(RenderTexture2D target) {
             it.draw   = [rp]() { rp->Draw(); };
             renderables.push_back(it);
         }
-        for (auto* b : offlineBots) {
-            RenderItem it;
-            it.depthY = b->GetDepthY();
-            it.draw   = [b]() { b->Draw(); };
-            renderables.push_back(it);
-        }
-
 
         // Foreground tile layers: every tile layer after the first (ground)
         bool pastGround = false;
@@ -1050,10 +859,6 @@ void GameplayScreen::Draw(RenderTexture2D target) {
             RenderItem it; it.depthY = rp->GetDepthY();
             it.draw = [rp]() { rp->Draw(); }; renderables.push_back(it);
         }
-        for (auto* b : offlineBots) {
-            RenderItem it; it.depthY = b->GetDepthY();
-            it.draw = [b]() { b->Draw(); }; renderables.push_back(it);
-        }
         std::sort(renderables.begin(), renderables.end(),
             [](const RenderItem& a, const RenderItem& b){ return a.depthY < b.depthY; });
         for (auto& it : renderables) it.draw();
@@ -1063,7 +868,6 @@ void GameplayScreen::Draw(RenderTexture2D target) {
     player->DrawUI();
     if (player2) player2->DrawUI();
     for (auto* rp : remotePlayers) rp->DrawUI();
-    for (auto* b : offlineBots) b->DrawUI();
 
     // ---- Voice speaking indicator (green dot above head) ----
     auto drawSpeakDot = [](Vector2 worldPos, float jumpOffset, bool speaking) {
@@ -1391,8 +1195,8 @@ void GameplayScreen::Draw(RenderTexture2D target) {
             }
         } else {
             board.push_back({ player->GetName().empty() ? "You" : player->GetName(), player->GetKills(), player->GetDeaths(), true, false });
-            for (auto b : offlineBots) {
-                board.push_back({ b->GetName().empty() ? "Bot" : b->GetName(), b->GetKills(), b->GetDeaths(), false, b->IsMonster() });
+            if (player2) {
+                board.push_back({ player2->GetName().empty() ? "Bot" : player2->GetName(), player2->GetKills(), player2->GetDeaths(), false, player2->IsMonster() });
             }
         }
 
@@ -1457,7 +1261,7 @@ void GameplayScreen::Draw(RenderTexture2D target) {
                                                    Color{ 210, 215, 230, 240 };
             const char* tag = board[i].isLocal   ? " [YOU]"    :
                               board[i].isMonster ? " [MONSTER]" : " [BOT]";
-            std::string displayName = board[i].name + (currentMode == GameMode::OFFLINE ? tag : "");
+            std::string displayName = board[i].name;
             DrawTextEx(sbFont, displayName.c_str(), { (float)panelX + 60, (float)ry + 8 }, 14.0f, 1.0f, nameColor);
 
             // Kills
@@ -1811,9 +1615,6 @@ Vector2 GameplayScreen::GetFarSpawnPoint() {
 
     std::vector<Character*> activeChars;
     if (!player->IsDead()) activeChars.push_back(player);
-    for (auto b : offlineBots) {
-        if (!b->IsDead()) activeChars.push_back(b);
-    }
 
     if (activeChars.empty()) {
         return mapSpawns[GetRandomValue(0, numSpawns - 1)];
@@ -1840,36 +1641,13 @@ Vector2 GameplayScreen::GetFarSpawnPoint() {
     return bestSpawn;
 }
 
-Character* GameplayScreen::GetNearestTargetForBot(BotEnemy* b) {
-    Character* nearest = nullptr;
-    float minDist = 999999.0f;
+int GameplayScreen::GetCharacterTeam(const Character* c) const {
+    return c ? c->GetTeamID() : 0;
+}
 
-    // Check player
-    if (!player->IsDead()) {
-        float dx = player->GetPosition().x - b->GetPosition().x;
-        float dy = player->GetPosition().y - b->GetPosition().y;
-        float dist = dx*dx + dy*dy;
-        minDist = dist;
-        nearest = player;
-    }
-
-    // Check other bots
-    for (auto other : offlineBots) {
-        if (other == b || other->IsDead()) continue;
-
-        // Monsters don't target other monsters!
-        if (b->IsMonster() && other->IsMonster()) continue;
-
-        float dx = other->GetPosition().x - b->GetPosition().x;
-        float dy = other->GetPosition().y - b->GetPosition().y;
-        float dist = dx*dx + dy*dy;
-        if (dist < minDist) {
-            minDist = dist;
-            nearest = other;
-        }
-    }
-
-    return nearest;
+Character* GameplayScreen::FindFlagCarrier() const {
+    if (flagCarrier && !flagCarrier->IsDead()) return flagCarrier;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
