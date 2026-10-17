@@ -1,6 +1,9 @@
 #include "character.h"
 #include "../utils/texture_manager.h"
 #include <math.h>
+#include <cmath>
+#include <algorithm>
+#include "../ui/game_settings.h"
 #include <iostream>
 #include "../ui/weapon_skin_catalog.h"
 
@@ -66,6 +69,7 @@ static void PlayWeaponSound(int index) {
             loaded[index] = true;
         }
         if (IsSoundValid(sounds[index])) {
+            SetSoundVolume(sounds[index], Settings::Get().sfx);
             PlaySound(sounds[index]);
         }
     }
@@ -188,6 +192,7 @@ void Character::SetWeaponSkin(int weaponSkin) {
 }
 
 void Character::TakeDamage(float amount) {
+    if (IsDead() || !std::isfinite(amount) || amount <= 0.0f) return;
     if (shieldTimer > 0.0f) return; // Shield absorbs all damage
     health -= amount;
     lastHitTimer = 3.0f; // show health bar for 3 seconds when hit
@@ -221,6 +226,15 @@ Vector2 Character::GetHandPosition() const {
     float hand_x = position.x + (1170.0f - 1024.0f) * scale * faceDirection;
     float hand_y = draw_y      + (1580.0f - 1024.0f) * scale;
     return { hand_x, hand_y };
+}
+
+WeaponPose Character::GetWeaponPose(Vector2 target) const {
+    Texture2D texture=weaponTextures.empty()?Texture2D{}:weaponTextures[std::clamp(currentWeaponIndex,0,(int)weaponTextures.size()-1)];
+    return AimWeapon(GetHandPosition(),target,faceDirection,scale*0.45f,GetWeaponGeometry(texture));
+}
+WeaponPose Character::GetWeaponPoseInDirection(Vector2 direction) const {
+    Texture2D texture=weaponTextures.empty()?Texture2D{}:weaponTextures[std::clamp(currentWeaponIndex,0,(int)weaponTextures.size()-1)];
+    return PoseWeapon(GetHandPosition(),direction,faceDirection,scale*0.45f,GetWeaponGeometry(texture));
 }
 
 // ---------------------------------------------------------------------------
@@ -367,10 +381,11 @@ bool Character::Shoot(Vector2 targetPos) {
         float len = sqrtf(dx*dx + dy*dy);
 
         if (len > 1.0f) {
-            Vector2 dir = { dx / len, dy / len };
-            float muzzleOff = 20.0f;
-            Vector2 projPos = { hand.x + dir.x * muzzleOff,
-                                hand.y + dir.y * muzzleOff };
+            WeaponPose pose = GetWeaponPose(targetPos);
+            Vector2 dir = pose.direction;
+            Vector2 projPos = {pose.muzzle.x+dir.x*2,pose.muzzle.y+dir.y*2};
+            lastShotDirection = dir;
+            aimTarget = targetPos;
 
             float bSpeed = WEAPONS[currentWeaponIndex].bulletSpeed;
             float bRange = WEAPONS[currentWeaponIndex].bulletRange;
@@ -393,9 +408,14 @@ bool Character::Shoot(Vector2 targetPos) {
 // Used by RemotePlayer: spawn a projectile using a pre-computed direction (no cooldown check)
 void Character::ShootInDirection(Vector2 dir) {
     if (IsDead()) return;
-    Vector2 hand = GetHandPosition();
-    float muzzleOff = 20.0f;
-    Vector2 projPos = { hand.x + dir.x * muzzleOff, hand.y + dir.y * muzzleOff };
+    float length=std::sqrt(dir.x*dir.x+dir.y*dir.y);
+    if (!std::isfinite(length) || length<0.001f) return;
+    dir={dir.x/length,dir.y/length};
+    faceDirection=dir.x<0?-1:1;
+    WeaponPose pose=GetWeaponPoseInDirection(dir);
+    Vector2 projPos{pose.muzzle.x+dir.x*2,pose.muzzle.y+dir.y*2};
+    lastShotDirection=dir;
+    aimTarget={pose.muzzle.x+dir.x*1000,pose.muzzle.y+dir.y*1000};
 
     float bSpeed = WEAPONS[currentWeaponIndex].bulletSpeed;
     float bRange = WEAPONS[currentWeaponIndex].bulletRange;
@@ -447,18 +467,8 @@ void Character::Draw() {
             float weaponScale = scale * 0.45f;
             Vector2 hand = GetHandPosition();
 
-            float dx = aimTarget.x - hand.x;
-            float dy = aimTarget.y - hand.y;
-            float rotation = 0.0f;
-            if (fabsf(dx) > 0.01f || fabsf(dy) > 0.01f) {
-                float angleDeg = atan2f(dy, dx) * RAD2DEG;
-                rotation = (faceDirection == 1) ? angleDeg : angleDeg - 180.0f;
-            }
-
-            float pivotX = (faceDirection == 1)
-                               ? 960.0f * weaponScale
-                               : (2048.0f - 960.0f) * weaponScale;
-            float pivotY = 1580.0f * weaponScale;
+            WeaponPose pose=GetWeaponPose(aimTarget);
+            float rotation=pose.rotation;
 
             Rectangle srcRec = { 0.0f, 0.0f,
                                   (float)currentTex.width  * faceDirection,
@@ -466,34 +476,23 @@ void Character::Draw() {
             Rectangle dstRec = { hand.x, hand.y,
                                   (float)currentTex.width  * weaponScale,
                                   (float)currentTex.height * weaponScale };
-            Vector2 origin = { pivotX, pivotY };
+            Vector2 origin = pose.origin;
             Color weaponTint = GetWeaponSlotSkinTint(currentWeaponIndex, weaponSkinId);
             weaponTint.a = (unsigned char)(weaponTint.a * alpha);
             DrawTexturePro(currentTex, srcRec, dstRec, origin, rotation, weaponTint);
 
             if (muzzleFlashTimer > 0.0f) {
-                Texture2D muzzleTex = TextureManager::GetTexture(
-                    "assets/Free 2D Animated Vector Game Character Sprites/"
-                    "Free 2D Animated Vector Game Character Sprites/Extras/muzzle.png");
-                if (muzzleTex.id != 0) {
-                    float muzzleScale = scale * 0.55f;
-
-                    float dx2 = aimTarget.x - hand.x;
-                    float dy2 = aimTarget.y - hand.y;
-                    float len2 = sqrtf(dx2*dx2 + dy2*dy2);
-                    Vector2 muzzleDir = (len2 > 0.1f) ? Vector2{dx2/len2, dy2/len2} : Vector2{1.0f, 0.0f};
-                    Vector2 muzzlePos = { hand.x + muzzleDir.x * 40.0f, hand.y + muzzleDir.y * 40.0f };
-
-                    Rectangle mSrc = { 0, 0, (float)muzzleTex.width * faceDirection, (float)muzzleTex.height };
-                    Rectangle mDst = { muzzlePos.x, muzzlePos.y,
-                                       (float)muzzleTex.width * muzzleScale,
-                                       (float)muzzleTex.height * muzzleScale };
-                    Vector2 mOrigin = { (float)muzzleTex.width * muzzleScale / 2.0f,
-                                        (float)muzzleTex.height * muzzleScale / 2.0f };
-                    Color muzzleTint = WHITE;
-                    muzzleTint.a = (unsigned char)(255.0f * alpha);
-                    DrawTexturePro(muzzleTex, mSrc, mDst, mOrigin, rotation, muzzleTint);
-                }
+                Vector2 start=pose.muzzle, dir=pose.direction, normal{-dir.y,dir.x};
+                float pulse=std::clamp(muzzleFlashTimer/0.08f,0.0f,1.0f);
+                float length=(currentWeaponIndex==1?42.0f:currentWeaponIndex==2?25.0f:32.0f)*(0.65f+0.35f*pulse);
+                auto point=[&](float along,float across) { return Vector2{start.x+dir.x*along+normal.x*across,start.y+dir.y*along+normal.y*across}; };
+                if (Settings::Get().effects) DrawCircleGradient(point(5,0),18,Fade(ORANGE,0.35f*alpha*pulse),Fade(ORANGE,0));
+                // Flame starts at the barrel opening and points along the exact shot axis.
+                DrawLineEx(point(0,0),point(length*0.68f,0),8*alpha,Fade(ORANGE,alpha));
+                DrawLineEx(point(1,0),point(length,0),3.5f,Fade(Color{255,240,166,255},alpha));
+                DrawLineEx(point(2,0),point(length*0.6f,0),2,Fade(WHITE,alpha));
+                DrawLineEx(point(6,0),point(length*0.36f,9*pulse),3,Fade(GOLD,alpha*pulse));
+                DrawLineEx(point(6,0),point(length*0.36f,-9*pulse),3,Fade(GOLD,alpha*pulse));
             }
         }
     }
@@ -666,6 +665,14 @@ int Character::GetMaxAmmo() const {
 
 bool Character::IsReloading() const {
     return reloadTimer > 0.0f;
+}
+
+void Character::RefillAmmo() {
+    for (int i = 0; i < 3; ++i) ammo[i] = WEAPONS[i].maxAmmo;
+}
+
+float Character::GetReloadProgress() const {
+    return IsReloading() ? 1.0f - reloadTimer / WEAPONS[currentWeaponIndex].reloadTime : 1.0f;
 }
 
 void Character::TriggerReload() {

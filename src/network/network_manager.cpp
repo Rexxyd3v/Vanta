@@ -1,3 +1,5 @@
+#include "../rules/match_rules.h"
+#include <cmath>
 #define WIN32_LEAN_AND_MEAN
 #define NOGDI
 #define NOUSER
@@ -352,22 +354,8 @@ void NetworkManager::Disconnect() {
         if (!isHost && serverPeer != nullptr) {
             enet_peer_disconnect(serverPeer, 0);
 
-            // Allow up to 3 seconds for the disconnect to succeed
-            ENetEvent event;
-            bool disconnected = false;
-            while (enet_host_service(host, &event, 3000) > 0) {
-                if (event.type == ENET_EVENT_TYPE_RECEIVE) {
-                    enet_packet_destroy(event.packet);
-                } else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
-                    disconnected = true;
-                    std::cout << "Disconnection succeeded." << std::endl;
-                    break;
-                }
-            }
-
-            if (!disconnected) {
-                enet_peer_reset(serverPeer);
-            }
+            enet_host_flush(host);
+            enet_peer_reset(serverPeer);
         }
 
         enet_host_destroy(host);
@@ -386,6 +374,7 @@ void NetworkManager::Disconnect() {
     pendingPeer = nullptr;
     joinTimeoutTimer = 0.0f;
     ResetMatch();
+    matchActive = false;
 }
 
 void NetworkManager::ResetMatch() {
@@ -420,6 +409,7 @@ void NetworkManager::RequestTeamChange(int teamID) {
 }
 
 void NetworkManager::SetPlayerTeam(uint32_t playerID, int teamID) {
+    if (!isHost || matchActive || teamID < 1 || teamID > 2) return;
     // Host-only: mutate the entry then broadcast.
     for (auto& pl : players) {
         if (pl.peerID == playerID) {
@@ -439,6 +429,17 @@ void NetworkManager::SetPlayerTeam(uint32_t playerID, int teamID) {
 }
 
 void NetworkManager::UpdateLobbySettings(OnlineGameMode mode, int time, int kills, int rounds) {
+    if (!isHost || matchActive) return;
+    if ((int)mode < 0 || (int)mode > 3) return;
+    if (mode != currentGameMode) {
+        if (mode == OnlineGameMode::ELIMINATION) { time = 120; kills = 0; }
+        else { time = 300; kills = 0; }
+        if (mode==OnlineGameMode::DEATHMATCH) rounds=5;
+    }
+    rounds = std::clamp(rounds, 1, 30);
+    time = std::clamp(time, 0, 1800);
+    kills = std::clamp(kills, 0, 200);
+    if (mode != OnlineGameMode::ELIMINATION && time == 0 && kills == 0) kills = 40;
     currentGameMode = mode;
     timeLimit       = time;
     killLimit       = kills;
@@ -468,6 +469,7 @@ void NetworkManager::Update() {
                           << event.peer->address.host << ":"
                           << event.peer->address.port << std::endl;
                 if (isHost) {
+                    if (matchActive) { enet_peer_disconnect_now(event.peer, 1); break; }
 
                     uint16_t incomingPeerID = event.peer->incomingPeerID;
                     uint32_t newPlayerID = AllocatePlayerID();
@@ -476,8 +478,7 @@ void NetworkManager::Update() {
 
                     // Auto-assign late joiners to the smaller team in team modes so
                     // matches stay balanced. FFA leaves them at teamID 0 (unassigned).
-                    if (currentGameMode == OnlineGameMode::TEAM_DEATHMATCH
-                        || currentGameMode == OnlineGameMode::ELIMINATION) {
+                    if (currentGameMode != OnlineGameMode::FREE_FOR_ALL) {
                         int grCount = 0, blCount = 0;
                         for (const auto& pl : players) {
                             if (pl.teamID == 1) grCount++;
@@ -551,6 +552,49 @@ void NetworkManager::Update() {
                 netEvent.data.resize(event.packet->dataLength);
                 std::memcpy(netEvent.data.data(), event.packet->data, event.packet->dataLength);
 
+                if (netEvent.data.size() < sizeof(PacketHeader)) { enet_packet_destroy(event.packet); break; }
+                auto* wire = reinterpret_cast<PacketHeader*>(netEvent.data.data());
+                if (isHost) {
+                    bool hostOnly = wire->type == PacketType::GAME_START || wire->type == PacketType::MAP_CHANGED ||
+                        wire->type == PacketType::LOBBY_SETTINGS || wire->type == PacketType::ROUND_START ||
+                        wire->type == PacketType::ROUND_END || wire->type == PacketType::MATCH_STATE ||
+                        wire->type == PacketType::RETURN_LOBBY || wire->type == PacketType::PLAYER_DISCONNECT || wire->type == PacketType::FLAG_STATE;
+                    if (hostOnly) { enet_packet_destroy(event.packet); break; }
+                    wire->playerID = netEvent.senderID;
+                    if (wire->type==PacketType::FLAG_INTERACT && (!matchActive || currentGameMode!=OnlineGameMode::DEATHMATCH || netEvent.data.size()!=sizeof(PacketHeader))) {
+                        enet_packet_destroy(event.packet); break;
+                    }
+                    if (matchActive && (wire->type == PacketType::PLAYER_TEAM_CHANGE || wire->type == PacketType::PLAYER_READY)) {
+                        enet_packet_destroy(event.packet); break;
+                    }
+                    if (wire->type == PacketType::PLAYER_DAMAGE) {
+                        if (netEvent.data.size() < sizeof(PacketPlayerDamage)) { enet_packet_destroy(event.packet); break; }
+                        auto* d = reinterpret_cast<PacketPlayerDamage*>(wire);
+                        auto* shooter = FindPlayer(wire->playerID); auto* victim = FindPlayer(d->targetPlayerID);
+                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 40 ||
+                            Rules::FriendlyFire(currentGameMode != OnlineGameMode::FREE_FOR_ALL, shooter->teamID, victim->teamID)) {
+                            enet_packet_destroy(event.packet); break;
+                        }
+                    }
+                    if (wire->type == PacketType::PLAYER_GRENADE) {
+                        if (!matchActive || netEvent.data.size() != sizeof(PacketPlayerGrenade)) { enet_packet_destroy(event.packet); break; }
+                        auto* g = reinterpret_cast<PacketPlayerGrenade*>(wire);
+                        float dx = g->target.x-g->start.x, dy = g->target.y-g->start.y;
+                        if (g->kind > 1 || !std::isfinite(g->start.x) || !std::isfinite(g->start.y) ||
+                            !std::isfinite(g->target.x) || !std::isfinite(g->target.y) || dx*dx+dy*dy > 651*651) {
+                            enet_packet_destroy(event.packet); break;
+                        }
+                    }
+                    if (wire->type == PacketType::PLAYER_KILLED) {
+                        if (netEvent.data.size() < sizeof(PacketPlayerKilled)) { enet_packet_destroy(event.packet); break; }
+                        auto* k = reinterpret_cast<PacketPlayerKilled*>(wire);
+                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID)) { enet_packet_destroy(event.packet); break; }
+                    }
+                    if (wire->type == PacketType::PLAYER_RESPAWN && matchActive && currentGameMode == OnlineGameMode::ELIMINATION) {
+                        enet_packet_destroy(event.packet); break;
+                    }
+                }
+
                 // Parse the packet type
                 if (netEvent.data.size() >= sizeof(PacketType)) {
                     PacketType packetType = static_cast<PacketType>(netEvent.data[0]);
@@ -603,10 +647,16 @@ void NetworkManager::Update() {
                                 reinterpret_cast<PacketPlayerConnect*>(netEvent.data.data());
 
                             uint32_t playerID  = connectPacket->header.playerID;
+                            connectPacket->username[sizeof(connectPacket->username)-1] = '\0';
                             std::string uname(connectPacket->username);
                             int skin       = connectPacket->charSkin;
                             int weaponSkin = connectPacket->weaponSkin;
-                            int teamID     = connectPacket->teamID;
+                            int teamID = connectPacket->teamID;
+                            connectPacket->username[sizeof(connectPacket->username)-1] = '\0';
+                            if (isHost) {
+                                if (auto* existing = FindPlayer(playerID)) teamID = existing->teamID;
+                                connectPacket->teamID = teamID;
+                            } else if (playerID == localPlayerID) localTeamID = teamID;
 
                             // Dedupe + update in one shot.
                             UpsertPlayer(playerID, uname, skin, weaponSkin, teamID);
@@ -622,7 +672,7 @@ void NetworkManager::Update() {
                                 // and we never forward the original sender's other fields.
                                 for (size_t i = 0; i < host->peerCount; ++i) {
                                     ENetPeer* peer = &host->peers[i];
-                                    if (peer == event.peer) continue;
+
                                     if (peer->state != ENET_PEER_STATE_CONNECTED) continue;
                                     ENetPacket* p = enet_packet_create(
                                         netEvent.data.data(), netEvent.data.size(),
@@ -690,7 +740,7 @@ void NetworkManager::Update() {
                                 enet_peer_send(peer, 0, p);
                             }
                         }
-                    } else if (packetType == PacketType::PLAYER_SHOOT) {
+                    } else if (packetType == PacketType::PLAYER_SHOOT || packetType == PacketType::PLAYER_GRENADE) {
                         if (isHost) {
                             for (size_t i = 0; i < host->peerCount; ++i) {
                                 ENetPeer* peer = &host->peers[i];
@@ -783,6 +833,7 @@ void NetworkManager::Update() {
                         if (netEvent.data.size() >= sizeof(PacketPlayerTeamChange)) {
                             PacketPlayerTeamChange* p =
                                 reinterpret_cast<PacketPlayerTeamChange*>(netEvent.data.data());
+                            if (p->teamID < 1 || p->teamID > 2) { enet_packet_destroy(event.packet); break; }
                             uint32_t changedID = p->header.playerID;
                             for (auto& pl : players) {
                                 if (pl.peerID == changedID) {
@@ -828,6 +879,11 @@ void NetworkManager::Update() {
                             }
                             roundPhase = RoundPhase::ROUND_OVER;
                         }
+                    } else if (packetType == PacketType::GAME_START) {
+                        matchActive = true;
+                        localKills = localDeaths = 0;
+                    } else if (packetType == PacketType::RETURN_LOBBY) {
+                        matchActive = false;
                     } else if (packetType == PacketType::VOICE_DATA) {
                         // Voice data packets are variable-length: header + seq + frameSize + only
                         // the actually-encoded audio bytes (NOT the full MAX_OPUS_FRAME_SIZE buffer).
@@ -1059,7 +1115,10 @@ int NetworkManager::GetTotalPlayerCount() const {
 }
 
 bool NetworkManager::StartGame() {
-    if (!isHost) return false;
+    if (!CanStartGame()) return false;
+    ResetMatch();
+    localKills = localDeaths = 0;
+    matchActive = true;
 
     PacketGameStart startPacket{};
     startPacket.header.type = PacketType::GAME_START;
@@ -1069,4 +1128,30 @@ bool NetworkManager::StartGame() {
 
     SendPacket(&startPacket, sizeof(startPacket), true);
     return true;
+}
+
+int NetworkManager::GetPingMs() const {
+    return !isHost && serverPeer && isConnected ? (int)serverPeer->roundTripTime : 0;
+}
+std::string NetworkManager::StartRequirement() const {
+    if (!isHost) return "Waiting for host to start";
+    if (players.size() < 2) return "At least 2 players required";
+    std::vector<int> teams;
+    for (const auto& p : players) {
+        if (p.username.empty() || p.username == "Unknown") return "Waiting for player information";
+        teams.push_back(p.teamID);
+    }
+    if (!Rules::TeamsValid(teams, currentGameMode != OnlineGameMode::FREE_FOR_ALL))
+        return "Both teams needed; size difference must be at most 1";
+    if (!AllPlayersReady()) return "Every player must be ready";
+    return "Ready to deploy";
+}
+bool NetworkManager::CanStartGame() const {
+    return isHost && isConnected && !matchActive && StartRequirement() == "Ready to deploy";
+}
+void NetworkManager::PrepareLobby() {
+    matchActive = false;
+    ResetMatch();
+    localKills = localDeaths = 0;
+    for (auto& p : players) p.isReady = false;
 }

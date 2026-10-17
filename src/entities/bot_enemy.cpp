@@ -1,6 +1,7 @@
 #include "bot_enemy.h"
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
 
 // Static demo-mode flag (false by default — only MenuBackground flips it on)
 bool BotEnemy::demoMode = false;
@@ -27,6 +28,23 @@ BotEnemy::BotEnemy(Vector2 startPosition, const std::string& assetPath)
     this->currentWeaponIndex = GetRandomValue(0, 2); // Random weapon for variety
     this->targetPosition = startPosition;
     this->respawnDelay = (float)GetRandomValue(25, 40) / 10.0f; // 2.5-4.0s
+}
+
+void BotEnemy::SetDifficulty(int level) {
+    difficulty=std::clamp(level,0,2);
+    const float speeds[]={85,110,145}, cooldowns[]={1.9f,1.25f,0.75f};
+    speed=speeds[difficulty]; shootCooldown=cooldowns[difficulty];
+}
+void BotEnemy::MoveToObjective(float dt,Vector2 target) {
+    if (IsDead()) return;
+    Vector2 delta{target.x-position.x,target.y-position.y};
+    float distance=std::sqrt(delta.x*delta.x+delta.y*delta.y);
+    SetAimTarget(target); faceDirection=delta.x>=0 ? 1 : -1;
+    if (distance>35) {
+        position.x+=delta.x/distance*speed*dt;
+        position.y+=delta.y/distance*speed*dt;
+        SetState(CharState::WALK);
+    } else SetState(CharState::IDLE);
 }
 
 BotEnemy::~BotEnemy() {
@@ -67,6 +85,8 @@ void BotEnemy::Update(float deltaTime) {
     for (auto& p : projectiles) {
         p->Update(deltaTime);
     }
+
+    projectiles.erase(std::remove_if(projectiles.begin(),projectiles.end(),[](const std::shared_ptr<Projectile>& p) { return !p->IsActive(); }),projectiles.end());
 
     // Update current animation
     if (animations.count(currentState)) {
@@ -278,9 +298,10 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
         }
 
         // Shoot if in aggro range
-        if (distance < BOT_AGGRO_RANGE && currentShootCooldown <= 0.0f) {
-            Shoot(playerPosition);
-            currentShootCooldown = BOT_SHOOT_COOLDOWN + ((float)GetRandomValue(0, 10) / 20.0f);
+        if (distance < (difficulty==0 ? 650.0f : difficulty==1 ? 900.0f : 1150.0f) && currentShootCooldown <= 0.0f) {
+            const int spread[]={90,38,8};
+            Shoot({playerPosition.x+GetRandomValue(-spread[difficulty],spread[difficulty]), playerPosition.y+GetRandomValue(-spread[difficulty],spread[difficulty])});
+            currentShootCooldown = shootCooldown + ((float)GetRandomValue(0, 10) / 30.0f);
         }
 
         // ---- JUMP / FALL state picking (override walk/idle) ----

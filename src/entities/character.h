@@ -4,6 +4,7 @@
 #include <raylib.h>
 #include "animation.h"
 #include "projectile.h"
+#include "weapon_geometry.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -45,6 +46,11 @@ public:
         health = amount;
         healthDisplay = amount;
         currentShootCooldown = 0.0f;
+        reloadTimer = 0.0f;
+        dashTimer = dashCooldown = shieldTimer = shieldCooldown = 0.0f;
+        floorHeight = 0.0f;
+        projectiles.clear();
+        RefillAmmo();
         jumpHeight = 0.0f;
         jumpVelocity = 0.0f;
         SetState(CharState::IDLE);
@@ -84,6 +90,7 @@ public:
     // Skills
     float GetDashCooldown() const { return dashCooldown; }
     float GetDashTimer() const { return dashTimer; }
+    float GetShieldTimer() const { return shieldTimer; }
     float GetShieldCooldown() const { return shieldCooldown; }
     bool ActivateDash(Vector2 direction);
     bool ActivateShield();
@@ -94,6 +101,8 @@ public:
     int GetMaxAmmo() const;
     bool IsReloading() const;
     void TriggerReload();
+    void RefillAmmo();
+    float GetReloadProgress() const;
 
     // Platform / jump system
     float GetJumpHeight()    const { return jumpHeight; }
@@ -169,6 +178,9 @@ public:
     CharState GetCurrentState() const { return currentState; }
     bool      DidShoot() { bool ret = justShot; justShot = false; return ret; }
     Vector2   GetHandPosition() const;
+    WeaponPose GetWeaponPose(Vector2 target) const;
+    WeaponPose GetWeaponPoseInDirection(Vector2 direction) const;
+    Vector2 GetLastShotDirection() const { return lastShotDirection; }
 
 protected:
     Vector2    position;
@@ -181,6 +193,7 @@ protected:
     int        kills;
     int        deaths;
     float      muzzleFlashTimer;
+    Vector2 lastShotDirection{1,0};
     float      dashTimer;
     float      dashCooldown;
     Vector2    dashDirection;

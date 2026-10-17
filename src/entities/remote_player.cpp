@@ -1,4 +1,5 @@
 #include "remote_player.h"
+#include <cmath>
 
 static const float CHAR_SCALE = 0.15f;
 
@@ -17,12 +18,14 @@ RemotePlayer::~RemotePlayer() {
 }
 
 void RemotePlayer::ApplyNetworkUpdate(Vector2 pos, int state, int weaponIndex, int faceDir, float hp, float jumpH, float jumpV, int weaponSkin) {
-    // TEST: Direct assignment to position
-    position.x = pos.x;
-    position.y = pos.y;
+    if (!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(hp)) return;
+    float dx = pos.x - position.x, dy = pos.y - position.y;
+    if (!hasNetworkTarget || dx*dx + dy*dy > 400.0f*400.0f) position = pos;
+    networkTarget = pos;
+    hasNetworkTarget = true;
 
     // Set animation state directly
-    CharState newState = (CharState)state;
+    CharState newState = (state >= 0 && state <= (int)CharState::DEATH) ? (CharState)state : CharState::IDLE;
     if (newState != currentState) {
         SetState(newState);
     }
@@ -44,6 +47,11 @@ void RemotePlayer::ApplyNetworkUpdate(Vector2 pos, int state, int weaponIndex, i
 }
 
 void RemotePlayer::Update(float deltaTime) {
+    if (hasNetworkTarget) {
+        float blend = 1.0f - std::exp(-20.0f * deltaTime);
+        position.x += (networkTarget.x - position.x) * blend;
+        position.y += (networkTarget.y - position.y) * blend;
+    }
     UpdateSkills(deltaTime);
 
     // Only update the animation timer, no keyboard input
@@ -66,5 +74,6 @@ void RemotePlayer::Update(float deltaTime) {
         aimDir = { (float)faceDirection, 0.0f };
     }
     // Aim target is a point in front of the character (used for weapon rotation)
-    aimTarget = { position.x + aimDir.x * 200.0f, position.y + aimDir.y * 200.0f };
+    WeaponPose pose=GetWeaponPoseInDirection(aimDir);
+    aimTarget = {pose.muzzle.x+pose.direction.x*1000,pose.muzzle.y+pose.direction.y*1000};
 }

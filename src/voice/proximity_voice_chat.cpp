@@ -353,7 +353,7 @@ void ProximityVoiceChat::playbackCallback(ma_device* dev, void* pOut,
         for (size_t i = 0; i < toRead; ++i) {
             float sample = s->pcmRing[s->readPos % s->pcmRing.size()];
             s->readPos++;
-            out[i] = std::clamp(out[i] + sample, -1.0f, 1.0f);
+            out[i] = std::clamp(out[i] + sample * self->m_outputVolume.load(), -1.0f, 1.0f);
         }
     }
 }

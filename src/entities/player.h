@@ -10,6 +10,7 @@ public:
     ~Player() override;
 
     void Update(float deltaTime) override;
+    void UpdateWithoutInput(float deltaTime);
     int  GetPlayerIndex() const { return playerIndex; }
 
 private:

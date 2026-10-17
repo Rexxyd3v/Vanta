@@ -3,8 +3,9 @@
 
 #include <raylib.h>
 #include "iscreen.h"
-#include "menu_background.h"
 #include "../constants.h"
+#include "menu_background.h"
+#include <memory>
 
 class MainMenuScreen : public IScreen {
 public:
@@ -21,22 +22,19 @@ private:
     GameMode selectedMode;
 
     Rectangle cardOnline;
+    Rectangle cardOffline;
 
     float hoverOnline;
+    float hoverOffline = 0;
 
     int keyboardNavIndex; // -1 = mouse, 1 = Online
 
     Music mainMenuMusic;
     Sound choiceSound;
-
-    MenuBackground* background;
-
+    std::unique_ptr<MenuBackground> background;
     float fadeInTimer;
-    float blurStrength;
     float uiRise;
-    float glitchTimer;       // total elapsed time for glitch timing
-    float glitchIntensity;   // 0..1, spikes randomly
-    float glitchCooldown;    // countdown until next glitch burst
+
 };
 
 #endif // MAIN_MENU_H

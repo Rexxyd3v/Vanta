@@ -60,6 +60,11 @@ public:
     int GetReadyPlayerCount() const;
     int GetTotalPlayerCount() const;
     bool StartGame();
+    bool CanStartGame() const;
+    std::string StartRequirement() const;
+    int GetPingMs() const;
+    void PrepareLobby();
+    bool matchActive = false;
 
     // Send packets
     void SendPacket(const void* data, size_t size, bool reliable = false);

@@ -13,6 +13,7 @@
 
 enum class GameMode {
     NONE,
+    PRACTICE,
     ONLINE
 };
 

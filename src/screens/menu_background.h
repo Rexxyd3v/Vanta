@@ -27,6 +27,7 @@ public:
     void Draw(RenderTexture2D target, float alpha, float blurStrength);
 
 private:
+    friend struct MenuBackgroundTestAccess;
     bool useCinematic = true;
     bool useParallaxBackdrop = false;
 

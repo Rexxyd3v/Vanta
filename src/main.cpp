@@ -1,12 +1,16 @@
 #define RAYGUI_IMPLEMENTATION
 #include <raylib.h>
 #include "constants.h"
+#include "ui/game_settings.h"
+#include <memory>
+#include <algorithm>
 #include "utils/render_utils.h"
 #include "screens/iscreen.h"
 #include "screens/intro_screen.h"
 #include "screens/main_level.h"
 #include "screens/main_menu.h"
 #include "screens/online_menu.h"
+#include "screens/offline_menu.h"
 #include "screens/lobby_screen.h"
 #include "network/network_manager.h"
 #include "map_loader/MapRegistry.h"
@@ -62,92 +66,85 @@ int main() {
     RenderTexture2D target = LoadRenderTexture(VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
     SetTextureFilter(target.texture, TEXTURE_FILTER_BILINEAR);
 
-    IScreen* currentScreen = new FirstScreen();
-    bool isFirstScreenActive = true;
-    bool isMainMenuActive = false;
-    bool isOnlineMenuActive = false;
-    bool isLobbyActive = false;
-    bool isGameplayActive = false;
-
-    while (!WindowShouldClose()) {
-        if (IsKeyPressed(KEY_F11)) {
-            ToggleFullscreen();
+    Settings::Load();
+    enum class Screen { Intro, Menu, Online, Offline, Lobby, Gameplay };
+    Screen screen = Screen::Intro;
+    std::unique_ptr<IScreen> currentScreen = std::make_unique<FirstScreen>();
+    bool exitRequested = false;
+    auto changeScreen = [&](Screen next, GameMode mode = GameMode::ONLINE) {
+        s_activeGameplay = nullptr;
+        getLocalPlayerPosCallback = nullptr;
+        currentScreen.reset(); // Destroy menu background before enabling gameplay audio/AI.
+        screen = next;
+        switch (next) {
+            case Screen::Intro: currentScreen = std::make_unique<FirstScreen>(); break;
+            case Screen::Menu: currentScreen = std::make_unique<MainMenuScreen>(); break;
+            case Screen::Offline: currentScreen = std::make_unique<OfflineMenuScreen>(); break;
+            case Screen::Online: currentScreen = std::make_unique<OnlineMenuScreen>(); break;
+            case Screen::Lobby: currentScreen = std::make_unique<LobbyScreen>(); break;
+            case Screen::Gameplay: currentScreen = std::make_unique<GameplayScreen>(mode); break;
         }
-
-        // Handle push-to-talk with C key
-        if (IsKeyDown(KEY_C)) {
-            proximityVoiceChat.setTransmitEnabled(true);
-        } else {
-            proximityVoiceChat.setTransmitEnabled(false);
-        }
-
-        float deltaTime = GetFrameTime();
-
-        // Update logic
-        if (currentScreen) {
+    };
+    while (!WindowShouldClose() && !exitRequested) {
+        if (IsKeyPressed(KEY_F11)) ToggleFullscreen();
+        bool overlayThisFrame = Settings::IsOpen();
+        if (IsKeyPressed(KEY_F10) && !overlayThisFrame) Settings::Open();
+        overlayThisFrame = overlayThisFrame || Settings::IsOpen();
+        Settings::Update();
+        SetMasterVolume(Settings::Get().master);
+        proximityVoiceChat.setOutputVolume(Settings::Get().master * Settings::Get().voice);
+        proximityVoiceChat.setTransmitEnabled(NetworkManager::GetInstance().IsConnected() &&
+            !overlayThisFrame && Settings::DownKey(Settings::Talk) && IsWindowFocused());
+        float deltaTime = std::min(GetFrameTime(), 0.1f);
+        // Online screens keep polling while settings are open; their input is suppressed.
+        if (currentScreen && (!overlayThisFrame || screen == Screen::Gameplay)) {
             if (!currentScreen->Update(deltaTime)) {
-                if (isFirstScreenActive) {
-                    delete currentScreen;
-                    currentScreen = new MainMenuScreen();
-                    isFirstScreenActive = false;
-                    isMainMenuActive = true;
-                } else if (isMainMenuActive) {
-                    MainMenuScreen* menu = static_cast<MainMenuScreen*>(currentScreen);
-                    GameMode mode = menu->GetSelectedMode();
-                    delete currentScreen;
-                    currentScreen = new OnlineMenuScreen();
-                    isOnlineMenuActive = true;
-                    isMainMenuActive = false;
-                } else if (isOnlineMenuActive) {
-                    OnlineMenuScreen* menu = static_cast<OnlineMenuScreen*>(currentScreen);
-                    if (menu->ShouldStartGame()) {
-                        delete currentScreen;
-                        currentScreen = new GameplayScreen(GameMode::ONLINE);
-                        isOnlineMenuActive = false;
-                        isGameplayActive = true;
-                    } else if (menu->ShouldGoToLobby()) {
-                        // Go to lobby screen
-                        delete currentScreen;
-                        currentScreen = new LobbyScreen();
-                        isOnlineMenuActive = false;
-                        isLobbyActive = true;
-                    } else {
-                        // User backed out to main menu
-                        delete currentScreen;
-                        currentScreen = new MainMenuScreen();
-                        isOnlineMenuActive = false;
-                        isMainMenuActive = true;
+                switch (screen) {
+                    case Screen::Intro: changeScreen(Screen::Menu); break;
+                    case Screen::Menu: {
+                        auto mode = static_cast<MainMenuScreen*>(currentScreen.get())->GetSelectedMode();
+                        if (mode == GameMode::NONE) exitRequested = true;
+                        else if (mode == GameMode::PRACTICE) changeScreen(Screen::Offline);
+                        else changeScreen(Screen::Online);
+                        break;
                     }
-                } else if (isLobbyActive) {
-                    LobbyScreen* lobby = static_cast<LobbyScreen*>(currentScreen);
-                    if (lobby->ShouldStartGame()) {
-                        delete currentScreen;
-                        currentScreen = new GameplayScreen(GameMode::ONLINE);
-                        isLobbyActive = false;
-                        isGameplayActive = true;
-                    } else {
-                        delete currentScreen;
-                        currentScreen = new MainMenuScreen();
-                        isLobbyActive = false;
-                        isMainMenuActive = true;
+                    case Screen::Offline:
+                        if (static_cast<OfflineMenuScreen*>(currentScreen.get())->ShouldStartGame()) changeScreen(Screen::Gameplay, GameMode::PRACTICE);
+                        else changeScreen(Screen::Menu);
+                        break;
+                    case Screen::Online: {
+                        auto* menu = static_cast<OnlineMenuScreen*>(currentScreen.get());
+                        if (menu->ShouldStartGame()) changeScreen(Screen::Gameplay);
+                        else if (menu->ShouldGoToLobby()) changeScreen(Screen::Lobby);
+                        else changeScreen(Screen::Menu);
+                        break;
                     }
-                } else if (isGameplayActive) {
-                    delete currentScreen;
-                    currentScreen = new MainMenuScreen();
-                    isGameplayActive = false;
-                    isMainMenuActive = true;
-                } else {
-                    delete currentScreen;
-                    currentScreen = nullptr;
-                    break;
+                    case Screen::Lobby:
+                        if (static_cast<LobbyScreen*>(currentScreen.get())->ShouldStartGame()) changeScreen(Screen::Gameplay);
+                        else changeScreen(Screen::Menu);
+                        break;
+                    case Screen::Gameplay:
+                        if (static_cast<GameplayScreen*>(currentScreen.get())->GetMode() == GameMode::PRACTICE) changeScreen(Screen::Offline);
+                        else if (static_cast<GameplayScreen*>(currentScreen.get())->ShouldReturnToLobby() && NetworkManager::GetInstance().IsConnected()) {
+                            NetworkManager::GetInstance().PrepareLobby();
+                            changeScreen(Screen::Lobby);
+                        } else changeScreen(Screen::Menu);
+                        break;
                 }
+            }
+        } else if (overlayThisFrame && NetworkManager::GetInstance().IsConnected()) {
+            // Screen events must not be consumed by a second poll before it resumes.
+            // Lobby/online screens are updated below with input disabled by Settings::IsOpen.
+            if (screen == Screen::Lobby && !currentScreen->Update(deltaTime)) {
+                if (static_cast<LobbyScreen*>(currentScreen.get())->ShouldStartGame()) changeScreen(Screen::Gameplay);
+                else changeScreen(Screen::Menu);
             }
         }
 
         // Update voice chat system
         if (proximityVoiceInitialized && currentScreen) {
             // Try to get local player from current screen if it's a gameplay screen
-            GameplayScreen* gameplayScreen = dynamic_cast<GameplayScreen*>(currentScreen);
+            GameplayScreen* gameplayScreen = dynamic_cast<GameplayScreen*>(currentScreen.get());
             if (gameplayScreen) {
                 // Track active gameplay screen so the callback can query it
                 s_activeGameplay = gameplayScreen;
@@ -171,16 +168,22 @@ int main() {
             currentScreen->Draw(target);
         }
 
+        BeginTextureMode(target);
+        Settings::Draw();
+        if (Settings::Get().showFps) DrawFPS(12, VIRTUAL_HEIGHT - 24);
+        EndTextureMode();
+
         BeginDrawing();
         ClearBackground(BLACK);
         DrawScaledToScreen(target);
         EndDrawing();
     }
 
-    if (currentScreen != nullptr) {
-        delete currentScreen;
-    }
-
+    s_activeGameplay = nullptr;
+    getLocalPlayerPosCallback = nullptr;
+    currentScreen.reset();
+    Settings::Save();
+    proximityVoiceChat.shutdown();
     UnloadRenderTexture(target);
     // TextureManager cleanup
     TextureManager::UnloadAll();

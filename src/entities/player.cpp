@@ -1,4 +1,5 @@
 #include "player.h"
+#include "../ui/game_settings.h"
 #include <math.h>
 
 static const float CHAR_SCALE = 0.15f;
@@ -18,6 +19,10 @@ Player::Player(Vector2 startPosition, int playerIndex, const std::string& skinPa
 Player::~Player() {}
 
 void Player::Update(float deltaTime) {
+    for (auto it = projectiles.begin(); it != projectiles.end();) {
+        (*it)->Update(deltaTime);
+        if (!(*it)->IsActive()) it = projectiles.erase(it); else ++it;
+    }
     if (IsDead()) {
         SetState(CharState::DEATH);
         UpdatePhysics(deltaTime);
@@ -32,7 +37,7 @@ void Player::Update(float deltaTime) {
     // ---- JUMP ----
     bool isOnGround = (jumpHeight <= floorHeight + 1.0f && jumpVelocity <= 0.0f);
     bool startedJumpThisFrame = false;
-    if (IsKeyPressed(KEY_SPACE) && isOnGround) {
+    if (Settings::Pressed(Settings::Jump) && isOnGround) {
         jumpVelocity = 420.0f;
         startedJumpThisFrame = true;
     }
@@ -43,10 +48,10 @@ void Player::Update(float deltaTime) {
     bool moving = false;
 
     if (playerIndex == 0) {
-        if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    { velocity.y = -speed; moving = true; }
-        if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))   { velocity.y =  speed; moving = true; }
-        if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))   { velocity.x = -speed; moving = true; }
-        if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT))  { velocity.x =  speed; moving = true; }
+        if (Settings::DownKey(Settings::Up) || IsKeyDown(KEY_UP))    { velocity.y = -speed; moving = true; }
+        if (Settings::DownKey(Settings::Down) || IsKeyDown(KEY_DOWN))   { velocity.y =  speed; moving = true; }
+        if (Settings::DownKey(Settings::Left) || IsKeyDown(KEY_LEFT))   { velocity.x = -speed; moving = true; }
+        if (Settings::DownKey(Settings::Right) || IsKeyDown(KEY_RIGHT))  { velocity.x =  speed; moving = true; }
     } else {
         if (IsKeyDown(KEY_I))  { velocity.y = -speed; moving = true; }
         if (IsKeyDown(KEY_K))  { velocity.y =  speed; moving = true; }
@@ -59,10 +64,10 @@ void Player::Update(float deltaTime) {
         velocity.y *= 0.7071f;
     }
 
-    if (IsKeyPressed(KEY_LEFT_SHIFT) || IsKeyPressed(KEY_RIGHT_SHIFT)) {
+    if (Settings::Pressed(Settings::Dash)) {
         ActivateDash(velocity);
     }
-    if (IsKeyPressed(KEY_E)) {
+    if (Settings::Pressed(Settings::Shield)) {
         ActivateShield();
     }
 
@@ -104,13 +109,13 @@ void Player::Update(float deltaTime) {
     // ---- SHOOT & WEAPONS ----
     if (playerIndex == 0) {
         if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) || IsKeyDown(KEY_Z)) Shoot(aimTarget);
-        if (IsKeyPressed(KEY_R)) TriggerReload();
+        if (Settings::Pressed(Settings::Reload)) TriggerReload();
         if (IsKeyPressed(KEY_ONE)) SwitchWeapon(0);
         if (IsKeyPressed(KEY_TWO)) SwitchWeapon(1);
         if (IsKeyPressed(KEY_THREE)) SwitchWeapon(2);
     } else {
         if (IsKeyDown(KEY_M) || IsKeyDown(KEY_KP_0)) Shoot(aimTarget);
-        if (IsKeyPressed(KEY_R)) TriggerReload();
+        if (Settings::Pressed(Settings::Reload)) TriggerReload();
         if (IsKeyPressed(KEY_SEVEN)) SwitchWeapon(0);
         if (IsKeyPressed(KEY_EIGHT)) SwitchWeapon(1);
         if (IsKeyPressed(KEY_NINE)) SwitchWeapon(2);
@@ -118,9 +123,15 @@ void Player::Update(float deltaTime) {
 
     animations[currentState]->Update(deltaTime);
 
+}
+
+void Player::UpdateWithoutInput(float dt) {
+    UpdateSkills(dt);
+    UpdatePhysics(dt);
+    if (animations.count(currentState)) animations[currentState]->Update(dt);
     for (auto it = projectiles.begin(); it != projectiles.end();) {
-        (*it)->Update(deltaTime);
-        if (!(*it)->IsActive()) it = projectiles.erase(it);
-        else                    ++it;
+        (*it)->Update(dt);
+        if (!(*it)->IsActive()) it = projectiles.erase(it); else ++it;
     }
+    if (currentShootCooldown > 0) currentShootCooldown -= dt;
 }

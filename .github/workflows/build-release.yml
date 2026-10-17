@@ -59,6 +59,7 @@ jobs:
             src/screens/*.cpp \
             src/utils/*.cpp \
             src/map_loader/*.cpp \
+            src/map_loader/scenes/*.cpp \
             src/entities/*.cpp \
             src/network/*.cpp \
             src/ui/*.cpp \
@@ -79,6 +80,12 @@ jobs:
             -lwinmm \
             -lgdi32 \
             -lopengl32
+
+      - name: Test match rules
+        shell: msys2 {0}
+        run: |
+          g++ -std=c++17 tests/rule_tests.cpp -o bin/rule_tests.exe
+          bin/rule_tests.exe
 
       - name: Verify EXE
         shell: msys2 {0}

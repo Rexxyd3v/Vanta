@@ -30,6 +30,10 @@ public:
     uint32_t peerID; // Which network peer this player belongs to
     std::string username;
     Vector2 lastAimDir; // Last known aiming direction (normalized)
+    void Teleport(Vector2 p) { SetPosition(p); networkTarget = p; hasNetworkTarget = true; }
+private:
+    Vector2 networkTarget{};
+    bool hasNetworkTarget = false;
 };
 
 #endif // REMOTE_PLAYER_H

@@ -11,7 +11,8 @@
 enum class OnlineGameMode : uint8_t {
     ELIMINATION = 0,
     FREE_FOR_ALL,
-    TEAM_DEATHMATCH
+    TEAM_DEATHMATCH,
+    DEATHMATCH // Team flag delivery with continuous base respawns.
 };
 
 enum class PacketType : uint8_t {
@@ -30,7 +31,12 @@ enum class PacketType : uint8_t {
     PLAYER_TEAM_CHANGE, // Client requests team change / Host broadcasts
     ROUND_START,        // Host signals start of elimination round
     ROUND_END,          // Host signals end of elimination round
-    VOICE_DATA          // Voice audio data (Opus encoded)
+    VOICE_DATA,         // Voice audio data (Opus encoded)
+    MATCH_STATE,       // Host clock/scores and end-of-match result
+    RETURN_LOBBY,
+    PLAYER_GRENADE,
+    FLAG_INTERACT,      // Client requests a drop or teammate handoff.
+    FLAG_STATE          // Host owns flag positions, carriers, and capture scores.
 };
 
 // Base header for all packets
@@ -74,6 +80,12 @@ struct PacketPlayerUpdate {
 struct PacketPlayerShoot {
     PacketHeader header;
     Vector2 aimDir;   // Normalized direction vector (not world position)
+};
+
+struct PacketPlayerGrenade {
+    PacketHeader header;
+    Vector2 start, target;
+    uint8_t kind; // 0 = frag, 1 = smoke
 };
 
 struct PacketPlayerDamage {
@@ -138,6 +150,29 @@ struct PacketRoundEnd {
     int winningTeamID; // 0 = Draw, 1 = GR, 2 = BL
     int grScore;
     int blScore;
+};
+
+struct PacketMatchState {
+    PacketHeader header;
+    float elapsed;
+    int grScore, blScore;
+    bool finished;
+    int winner; // team ID, FFA player ID, or -1 for draw
+};
+
+struct FlagWireState {
+    Vector2 position;
+    uint32_t carrierID; // UINT32_MAX means no carrier; host has ID zero.
+    bool dropped;
+    float returnTimer, respawnTimer;
+};
+struct PacketFlagState {
+    PacketHeader header;
+    FlagWireState flags[2];
+    int grScore, blScore;
+    uint32_t announcementSerial;
+    int announcementTeam;
+    char announcement[96];
 };
 
 // Voice data packet (Opus encoded audio)

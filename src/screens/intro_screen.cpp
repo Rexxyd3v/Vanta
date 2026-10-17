@@ -160,7 +160,7 @@ void FirstScreen::Draw(RenderTexture2D target) {
         DrawRectangle(800 - (int)secondBottomAndRight, 450, (int)secondBottomAndRight, 20, BLACK);
         DrawRectangle(780, 450 - (int)secondBottomAndRight, 20, (int)secondBottomAndRight, BLACK);
         DrawTextEx(secondFont, "www.raylib.com", (Vector2){1145, 655}, 20, 2, BLACK);
-        DrawTextEx(secondFont, "@Si_pogi", (Vector2){10, 655}, 20, 2, BLACK);
+        DrawTextEx(secondFont, "@rjltyd", (Vector2){10, 655}, 20, 2, BLACK);
         if (secondTextVisible) {
             DrawText("Powered by:", 505, 115, 25, BLACK);
             DrawText("raylib", 620, 390, 50, BLACK);

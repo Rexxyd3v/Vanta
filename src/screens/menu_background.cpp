@@ -72,7 +72,6 @@ MenuBackground::MenuBackground(int localSkinIndex, BackdropStyle style) {
     Character::SetCombatAudioEnabled(false); // Silence gun SFX on menu
 
     // Parallax option not present in this build; keep disabled.
-    (void)style;
     useParallaxBackdrop = false;
 
 
@@ -88,7 +87,8 @@ MenuBackground::MenuBackground(int localSkinIndex, BackdropStyle style) {
 
     // Camera starts at world center
     camera.target   = { WORLD_WIDTH / 2.0f, WORLD_HEIGHT / 2.0f };
-    camera.offset   = { VIRTUAL_WIDTH / 2.0f, VIRTUAL_HEIGHT / 2.0f };
+    // Main menu leaves the left side for the title and places the live fight on the right.
+    camera.offset   = { VIRTUAL_WIDTH * (style==BackdropStyle::LIVE_GAMEPLAY?0.72f:0.5f), VIRTUAL_HEIGHT / 2.0f };
     camera.rotation = 0.0f;
     camera.zoom     = 1.0f;
 
@@ -362,15 +362,16 @@ void MenuBackground::TickWorld(float deltaTime) {
     camera.target.x += (fightFocus.x - camera.target.x) * 1.2f * deltaTime;
     camera.target.y += (fightFocus.y - camera.target.y) * 1.2f * deltaTime;
 
-    // Clamp so the camera never shows outside the world
-    float halfVW = VIRTUAL_WIDTH  / (2.0f * camera.zoom);
-    float halfVH = VIRTUAL_HEIGHT / (2.0f * camera.zoom);
-    camera.target.x = fclamp(camera.target.x, halfVW, (float)WORLD_WIDTH  - halfVW);
-    camera.target.y = fclamp(camera.target.y, halfVH, (float)WORLD_HEIGHT - halfVH);
-
-    // Smooth zoom
+    // Clamp using the zoom that will actually be rendered this frame.
     cameraZoom += (cameraZoomTarget - cameraZoom) * 0.8f * deltaTime;
     camera.zoom = cameraZoom;
+
+    // Clamp so the camera never shows outside the world
+    camera.target.x = fclamp(camera.target.x, camera.offset.x/camera.zoom,
+        WORLD_WIDTH-(VIRTUAL_WIDTH-camera.offset.x)/camera.zoom);
+    camera.target.y = fclamp(camera.target.y, camera.offset.y/camera.zoom,
+        WORLD_HEIGHT-(VIRTUAL_HEIGHT-camera.offset.y)/camera.zoom);
+
 }
 
 void MenuBackground::Update(float deltaTime, float fadeInAlpha) {
@@ -464,8 +465,8 @@ void MenuBackground::DrawScene() {
     if (currentMapData && currentMapData->tmxMap) {
         float viewW = VIRTUAL_WIDTH / camera.zoom;
         float viewH = VIRTUAL_HEIGHT / camera.zoom;
-        Rectangle viewport = { camera.target.x - viewW * 0.5f,
-                               camera.target.y - viewH * 0.5f,
+        Rectangle viewport = { camera.target.x - camera.offset.x/camera.zoom,
+                               camera.target.y - camera.offset.y/camera.zoom,
                                viewW,
                                viewH };
         DrawTMX(currentMapData->tmxMap, &camera, &viewport, 0, 0, WHITE);

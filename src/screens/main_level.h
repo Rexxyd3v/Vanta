@@ -10,9 +10,11 @@
 #include <memory>
 #include <functional>
 #include "../constants.h"
+#include "../ui/offline_setup.h"
 #include "../map_loader/MapRegistry.h"
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 // Default world dimensions (fallback if no map loaded)
 #define DEFAULT_WORLD_WIDTH  3900
@@ -26,6 +28,7 @@ struct RenderItem {
     std::function<void()> draw;
 };
 
+struct PacketFlagState;
 class GameplayScreen : public IScreen {
 public:
     explicit GameplayScreen(GameMode mode);
@@ -34,14 +37,85 @@ public:
     bool Update(float deltaTime) override;
     void Draw(RenderTexture2D target) override;
 
+    GameMode GetMode() const { return currentMode; }
+    bool ThrowGrenade(int kind);
+    float GetGrenadeCooldown(int kind) const { return kind >= 0 && kind < 2 ? grenadeCooldown[kind] : 0; }
+
     // Used by voice/proximity system in main.cpp
     Character* GetLocalPlayer() const { return player; }
     
     // Get current world dimensions (from loaded TMX map or defaults)
     float GetWorldWidth() const { return worldWidth; }
     float GetWorldHeight() const { return worldHeight; }
+    bool ShouldReturnToLobby() const { return returnToLobby; }
 
 private:
+    friend struct GameplayEffectsTestAccess;
+    std::vector<std::unique_ptr<BotEnemy>> bots;
+    std::unordered_set<uint32_t> eliminated;
+    bool returnToLobby = false;
+    float elapsed = 0, stateTimer = 0, roundElapsed = 0, deadFor = 0;
+    float hitMarker = 0, damageFlash = 0;
+    Vector2 damageSource{};
+    int matchWinner = -1;
+    struct DamageNumber { Vector2 position; float amount; float life; };
+    std::vector<DamageNumber> damageNumbers;
+    void RegisterHit(Vector2 position, float damage);
+    void ProcessKill(uint32_t killer, uint32_t victim);
+    Offline::Setup offlineSetup;
+    int offlineScores[3] = {0,0,0};
+    bool offlineRoundOver = false;
+    struct FlagState {
+        Vector2 position{};
+        Character* carrier=nullptr;
+        Character* previousCarrier=nullptr;
+        bool dropped=false;
+        float returnTimer=0, respawnTimer=0, pickupLock=0;
+    };
+    FlagState flags[3];
+    float flagStateTimer=0;
+    uint32_t flagAnnouncementSerial=0;
+    std::unordered_set<uint32_t> flagInteractRequests;
+    float flagAnnouncementTimer=0;
+    std::string flagAnnouncement;
+    int flagAnnouncementTeam=0;
+    std::string offlineResult;
+    void InitializeOffline();
+    void StartOfflineRound();
+    void EndOfflineRound(int winner, const char* reason);
+    void UpdateOfflineFlow(float dt);
+    void UpdateFlags(float dt, bool dropFlag, Character* actor=nullptr);
+    bool IsFlagDeathmatch() const;
+    void UpdateOnlineFlags(float dt);
+    PacketFlagState MakeFlagState() const;
+    void ApplyFlagState(const PacketFlagState& packet);
+    void ResetFlag(int team, float delay=0);
+    void InitializeBases();
+    Vector2 SafeSpawn(Vector2 desired);
+    Vector2 GetDeathmatchSpawnPoint(uint32_t identity) const;
+    Vector2 GroundPoint(Vector2 anchor) const;
+    bool HasTeamBases() const;
+    bool HasDeathmatchBases() const;
+    void DrawBases();
+    void DrawFlags();
+    void DrawWavingFlag(Vector2 feet,int team,float size,float phase,int direction=1,float poleHeight=136) const;
+    void AnnounceFlag(const std::string& text,int team);
+    void RecordOfflineKill(Character* killer, Character* victim);
+    bool OfflineEnemies(const Character* a, const Character* b) const;
+    Character* NearestOfflineEnemy(Character* source) const;
+    void UpdatePractice(float dt);
+    void UpdateMatchFlow(float dt);
+    void DrawHud();
+    struct GrenadeEffect { Vector2 start, target; float age; int kind; bool local; uint32_t ownerID = 0; int ownerTeam = 0; };
+    std::vector<GrenadeEffect> grenades;
+    float grenadeCooldown[2] = {0, 0};
+    float explosionShake = 0, poisonExposure = 0;
+    void UpdateGrenades(float dt, bool allowInput);
+    void DrawGrenades();
+    void DrawGrenadeScars();
+    void ApplyPoisonDamage(const GrenadeEffect& effect, Character* victim);
+    void ResetGrenades() { grenades.clear(); grenadeCooldown[0] = grenadeCooldown[1] = 0; explosionShake = poisonExposure = 0; }
+    void RespawnLocal();
     // Map data
     MapData* currentMapData;
     TmxMap* currentTmxMap;
@@ -65,10 +139,10 @@ private:
     float matchEndTimer       = 0.0f;
     int   currentRoundNumber  = 0;
     int   lastRoundWinnerID   = 0;
-    Vector2 flagPosition{};
     Vector2 teamBasePositions[3]{};
-    Character* flagCarrier = nullptr;
-    int flagTeam = 0;
+    std::vector<Vector2> teamSpawnPoints[3];
+    Vector2 deathmatchBases[4]{};
+    Vector2 deathmatchSpawns[16]{};
 
     // Pause menu state
     bool isPaused = false;
@@ -109,7 +183,7 @@ private:
     Character* GetNearestEnemy(Vector2 pos);
     Vector2 GetFarSpawnPoint();
     int GetCharacterTeam(const Character* c) const;
-    Character* FindFlagCarrier() const;
+    bool cinematicCapture = false;
 };
 
 #endif

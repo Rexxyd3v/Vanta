@@ -39,6 +39,7 @@ public:
     // Push-to-talk control
     void setTransmitEnabled(bool enabled);
     bool isLocalSpeaking() const;
+    void setOutputVolume(float volume) { m_outputVolume.store(volume); }
 
     // UI: true if we recently received audio from userID
     bool isUserSpeaking(uint32_t userID) const;
@@ -81,6 +82,7 @@ private:
     OpusEncoder*    m_encoder = nullptr;
 
     std::atomic<bool>     m_initialized{false};
+    std::atomic<float>    m_outputVolume{0.8f};
     std::atomic<bool>     m_transmitting{false};
     std::atomic<uint64_t> m_localSpeakUntilMs{0};
 

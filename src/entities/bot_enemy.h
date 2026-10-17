@@ -14,6 +14,8 @@ public:
     // Provide a reference to the target to chase/shoot at
     void UpdateAI(float deltaTime, Vector2 targetPosition);
 
+    void SetDifficulty(int level);
+    void MoveToObjective(float dt, Vector2 target);
     bool ShouldRespawn() const;
     void ResetDeathTimer();
 
@@ -29,6 +31,7 @@ public:
 void SetSpawnFadeTimer(float t) { spawnFadeTimer = t; }
 
 private:
+    int difficulty = 1;
     float spawnFadeTimer{0.0f};
     float respawnDelay{0.0f};    // Time to wait before respawning (randomized per bot)
     float stateTimer;
