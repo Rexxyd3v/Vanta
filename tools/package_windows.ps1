@@ -1,7 +1,7 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version = '1.0.0',
     [string]$BuildDir = 'bin/release-build',
-    [string]$MsysBin = 'C:/msys64/ucrt64/bin',
+    [string]$MsysBin = '',
     [string]$Compiler = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -15,7 +15,12 @@ if (!$Compiler) {
     $Compiler = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 }
 if (!$Compiler -or !(Test-Path -LiteralPath $Compiler)) { throw 'Install Inno Setup 6 or pass -Compiler with the full ISCC.exe path.' }
-$objdump = Join-Path $MsysBin 'objdump.exe'
+if (!$MsysBin) {
+    $compilerEntry = Get-Content -LiteralPath (Join-Path $build 'CMakeCache.txt') | Where-Object { $_ -match '^CMAKE_CXX_COMPILER:[^=]+=' } | Select-Object -First 1
+    if (!$compilerEntry) { throw 'Cannot find the build compiler in CMakeCache.txt. Pass -MsysBin explicitly.' }
+    $MsysBin = Split-Path -Parent ($compilerEntry -split '=',2)[1]
+}
+$objdump = Join-Path $MsysBin 'objdump.exe' 
 $strip = Join-Path $MsysBin 'strip.exe'
 if (!(Test-Path -LiteralPath $objdump)) { throw "MSYS2 objdump is missing: $objdump" }
 $release = Join-Path $root "bin/release/$Version"
@@ -51,7 +56,7 @@ if (Test-Path -LiteralPath $strip) {
 }
 $source = (& git -C $root rev-parse HEAD).Trim()
 @("VANTA $Version", 'Publisher: R Gamestudio', "Source commit: $source", 'Platform: Windows x64', 'Includes game assets and all non-system runtime DLLs.') | Set-Content -LiteralPath (Join-Path $stage 'BUILD-INFO.txt') -Encoding utf8
-& $Compiler "/DAppVersion=$Version" "/DSourceDir=$stage" "/DReleaseDir=$release" (Join-Path $root 'packaging/windows.iss')
+& $Compiler /Qp "/DAppVersion=$Version" "/DSourceDir=$stage" "/DReleaseDir=$release" (Join-Path $root 'packaging/windows.iss')
 if ($LASTEXITCODE -ne 0) { throw "Installer compiler failed: $LASTEXITCODE" }
 $installer = Join-Path $release "VANTA-$Version-Setup.exe"
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
