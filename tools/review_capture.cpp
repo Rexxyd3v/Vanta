@@ -44,7 +44,7 @@ struct Mp4 {
     Wave shots[6]{}; std::vector<Voice> voices;
     void shot(int weapon,int frame,float gain) { if(frame>=0) voices.push_back({weapon==1 || weapon==6?1:weapon==2 || weapon==4?2:0,(long long)frame*(44100/FPS),gain}); }
     void effect(int kind,int frame,float gain) {if(frame>=0)voices.push_back({kind,(long long)frame*(44100/FPS),gain});}
-    Mp4(const wchar_t* path) {
+    Mp4(const wchar_t* path,int width=W,int height=H,int bitrate=12000000) {
         hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED)); hr(MFStartup(MF_VERSION));
         IMFAttributes* attributes=nullptr; hr(MFCreateAttributes(&attributes,2));
         hr(attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,TRUE));
@@ -52,14 +52,14 @@ struct Mp4 {
         hr(MFCreateSinkWriterFromURL(path,nullptr,attributes,&writer)); release(attributes);
         IMFMediaType *output=nullptr,*input=nullptr;
         hr(MFCreateMediaType(&output)); hr(output->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video));
-        hr(output->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_H264)); hr(output->SetUINT32(MF_MT_AVG_BITRATE,12000000));
+        hr(output->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_H264)); hr(output->SetUINT32(MF_MT_AVG_BITRATE,bitrate));
         hr(output->SetUINT32(MF_MT_INTERLACE_MODE,MFVideoInterlace_Progressive));
-        hr(MFSetAttributeSize(output,MF_MT_FRAME_SIZE,W,H)); hr(MFSetAttributeRatio(output,MF_MT_FRAME_RATE,FPS,1));
+        hr(MFSetAttributeSize(output,MF_MT_FRAME_SIZE,width,height)); hr(MFSetAttributeRatio(output,MF_MT_FRAME_RATE,FPS,1));
         hr(MFSetAttributeRatio(output,MF_MT_PIXEL_ASPECT_RATIO,1,1)); hr(writer->AddStream(output,&video)); release(output);
         hr(MFCreateMediaType(&input)); hr(input->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video));
         hr(input->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_RGB32)); hr(input->SetUINT32(MF_MT_INTERLACE_MODE,MFVideoInterlace_Progressive));
-        hr(MFSetAttributeSize(input,MF_MT_FRAME_SIZE,W,H)); hr(MFSetAttributeRatio(input,MF_MT_FRAME_RATE,FPS,1));
-        hr(MFSetAttributeRatio(input,MF_MT_PIXEL_ASPECT_RATIO,1,1)); hr(input->SetUINT32(MF_MT_DEFAULT_STRIDE,W*4));
+        hr(MFSetAttributeSize(input,MF_MT_FRAME_SIZE,width,height)); hr(MFSetAttributeRatio(input,MF_MT_FRAME_RATE,FPS,1));
+        hr(MFSetAttributeRatio(input,MF_MT_PIXEL_ASPECT_RATIO,1,1)); hr(input->SetUINT32(MF_MT_DEFAULT_STRIDE,width*4));
         hr(writer->SetInputMediaType(video,input,nullptr)); release(input);
         hr(MFCreateMediaType(&output)); hr(output->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Audio));
         hr(output->SetGUID(MF_MT_SUBTYPE,MFAudioFormat_AAC)); hr(output->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,2));
@@ -130,7 +130,7 @@ struct Mp4 {
     ~Mp4() { for(auto& shot:shots) UnloadWave(shot); UnloadWave(music); release(writer); MFShutdown(); CoUninitialize(); }
 };
 
-void extract(const wchar_t* path) {
+void extract(const wchar_t* path,const char* pattern="bin/review/highlight-decoded-%04d.png") {
     hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED)); hr(MFStartup(MF_VERSION));
     IMFAttributes* attributes=nullptr; hr(MFCreateAttributes(&attributes,1));
     hr(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,TRUE));
@@ -151,7 +151,7 @@ void extract(const wchar_t* path) {
                 const BYTE* pixel=data+(stride<0?(height-1-y)*(-stride):y*stride)+x*4;
                 int p=y*width+x; out[p*4]=pixel[2]; out[p*4+1]=pixel[1]; out[p*4+2]=pixel[0]; out[p*4+3]=255;
             }
-            ExportImage(image,TextFormat("bin/review/highlight-decoded-%04d.png",i)); UnloadImage(image);
+            ExportImage(image,TextFormat(pattern,i)); UnloadImage(image);
             hr(b->Unlock()); release(b);
         }
         release(s);
@@ -381,6 +381,41 @@ struct GameplayEffectsTestAccess {
 void centered(Font font,const char* text,float y,float size,Color color,float spacing=2) {
     Vector2 m=MeasureTextEx(font,text,size,spacing);DrawTextEx(font,text,{(W-m.x)/2,y},size,spacing,color);
 }
+void webVideo() {
+    std::filesystem::create_directories("docs/media");
+    IMFAttributes* attributes=nullptr;hr(MFCreateAttributes(&attributes,1));
+    hr(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING,TRUE));
+    IMFSourceReader* reader=nullptr;hr(MFCreateSourceReaderFromURL(L"bin/review/vanta-riot-highlights.mp4",attributes,&reader));release(attributes);
+    hr(reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS,FALSE));
+    IMFMediaType* type=nullptr;hr(MFCreateMediaType(&type));hr(type->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video));
+    hr(type->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_RGB32));
+    hr(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,nullptr,type));release(type);
+    hr(MFCreateMediaType(&type));hr(type->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Audio));hr(type->SetGUID(MF_MT_SUBTYPE,MFAudioFormat_PCM));
+    hr(type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,2));hr(type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,44100));hr(type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,16));
+    hr(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_AUDIO_STREAM,nullptr,type));release(type);
+    hr(reader->SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM,TRUE));hr(reader->SetStreamSelection(MF_SOURCE_READER_FIRST_AUDIO_STREAM,TRUE));
+    Mp4 output(L"docs/media/vanta-riot-highlights.mp4",1280,720,850000);
+    int frames=0,ended=0;
+    while(ended<2) {
+        DWORD stream=0,flags=0;LONGLONG timestamp=0;IMFSample* sample=nullptr;
+        HRESULT read=reader->ReadSample(MF_SOURCE_READER_ANY_STREAM,0,&stream,&flags,&timestamp,&sample);
+        if(FAILED(read)) {std::cout<<"Reader ended at frame "<<frames<<", ended streams "<<ended<<std::endl;if(frames==1991)break;hr(read);}
+        if(flags&MF_SOURCE_READERF_ENDOFSTREAM) {std::cout<<"End stream "<<stream<<" at "<<frames<<" frames"<<std::endl;reader->SetStreamSelection(stream,FALSE);++ended;release(sample);continue;}
+        if(!sample)continue;
+        hr(reader->GetCurrentMediaType(stream,&type));GUID major{};hr(type->GetGUID(MF_MT_MAJOR_TYPE,&major));UINT32 width=0,height=0,pitch=0;if(major==MFMediaType_Video){hr(MFGetAttributeSize(type,MF_MT_FRAME_SIZE,&width,&height));if(FAILED(type->GetUINT32(MF_MT_DEFAULT_STRIDE,&pitch)))pitch=width*4;}release(type);
+        IMFMediaBuffer* buffer=nullptr;hr(sample->ConvertToContiguousBuffer(&buffer));BYTE* data=nullptr;DWORD size=0;hr(buffer->Lock(&data,nullptr,&size));
+        LONGLONG duration=0;if(FAILED(sample->GetSampleDuration(&duration)))duration=major==MFMediaType_Video?10000000/FPS:(LONGLONG)size*10000000/(44100*4);
+        if(major==MFMediaType_Video) {
+            Image image=GenImageColor(width,std::min(height,1080u),BLACK);LONG stride=(LONG)pitch;
+            for(int row=0;row<image.height;++row)std::memcpy((BYTE*)image.data+row*width*4,data+(stride<0?(height-1-row)*(-stride):row*stride),width*4);
+            for(int pixel=0;pixel<image.width*image.height;++pixel)((BYTE*)image.data)[pixel*4+3]=255;
+            ImageResize(&image,1280,720);output.sample(output.video,image.data,1280*720*4,timestamp,duration);UnloadImage(image);
+            if(++frames%300==0)std::cout<<"Compressed "<<frames<<" frames"<<std::endl;}
+        else output.sample(output.audio,data,size,timestamp,duration);
+        hr(buffer->Unlock());release(buffer);release(sample);
+    }
+    output.finish();release(reader);std::cout<<"GitHub video ready: "<<frames<<" frames"<<std::endl;
+}
 int main(int argc,char** argv) {
     try {
         hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED));
@@ -388,6 +423,8 @@ int main(int argc,char** argv) {
         InitAudioDevice();SetMasterVolume(0);SetExitKey(KEY_NULL);SetRandomSeed(20261018);Character::SetCombatAudioEnabled(false);
         std::filesystem::create_directories("bin/review");
         if(argc>1 && std::string(argv[1])=="--extract") {extract(L"bin/review/vanta-riot-highlights.mp4");return 0;}
+        if(argc>1 && std::string(argv[1])=="--web-video") {hr(MFStartup(MF_VERSION));webVideo();return 0;}
+        if(argc>1 && std::string(argv[1])=="--extract-web") {extract(L"docs/media/vanta-riot-highlights.mp4","bin/review/github-decoded-%04d.png");return 0;}
         bool probe=argc>1 && std::string(argv[1])=="--probe";
         MapRegistry::GetInstance().LoadAllMaps();NetworkManager::GetInstance().Initialize();
         FilmScene scene[3];const char* maps[]={"MagmaRift","AbandonedFoundry","DesertOutpost"};
