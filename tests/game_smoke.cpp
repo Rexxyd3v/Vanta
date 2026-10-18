@@ -9,12 +9,61 @@
 #include "network/network_manager.h"
 #include "ui/weapon_skin_catalog.h"
 #include "ui/weapon_skin_preview.h"
+#include "ui/loadout_storage.h"
+#include "rules/grenade_rules.h"
+#include <filesystem>
 #include "ui/ui_theme.h"
 #include "map_loader/map_effects.h"
 #include <iostream>
 #include <cmath>
 #include <cstdlib>
 
+struct VoiceTestAccess {
+    static bool ExerciseAudioPath() {
+        ProximityVoiceChat voice;
+        voice.setTransmitEnabled(true);
+        bool ok=!voice.isLocalSpeaking(); // A failed/unopened microphone must not claim to transmit.
+        int error=0;
+        voice.m_encoder=opus_encoder_create(48000,1,OPUS_APPLICATION_VOIP,&error);
+        if(!voice.m_encoder || error!=OPUS_OK) return false;
+        voice.m_initialized.store(true);
+        ma_device device{}; device.pUserData=&voice;
+        std::vector<int16_t> input(960);
+        for(int i=0;i<960;++i) input[i]=(int16_t)(std::sin(i*2*PI*440/48000)*8000);
+        voice.captureCallback(&device,nullptr,input.data(),960);
+        ok&=voice.m_outgoing.empty(); // No key held: no audio packets.
+        voice.setTransmitEnabled(true);
+        voice.captureCallback(&device,nullptr,input.data(),960);
+        ok&=voice.m_outgoing.size()==1;
+        auto packet=voice.m_outgoing.front();
+        ok&=packet.frameSize>0 && packet.frameSize<=MAX_OPUS_FRAME_SIZE;
+        voice.processVoicePacket(&packet,11);
+        size_t samples=voice.m_senders[11]->writePos;
+        voice.processVoicePacket(&packet,11);
+        ok&=voice.m_senders[11]->writePos==samples; // Duplicate packets never repeat speech.
+        voice.setOutputVolume(.5f);
+        std::vector<float> output(960);
+        voice.playbackCallback(&device,output.data(),nullptr,960);
+        float energy=0;for(float sample:output) energy+=sample*sample;
+        ok&=energy>.01f && voice.isUserSpeaking(11);
+        for(int i=0;i<15;++i) voice.captureCallback(&device,nullptr,input.data(),960);
+        ok&=voice.m_outgoing.size()==10; // Bounded backlog.
+        voice.captureCallback(&device,nullptr,input.data(),24);
+        voice.setTransmitEnabled(false);
+        ok&=voice.m_outgoing.empty() && voice.m_captureBuf.empty();
+        voice.captureCallback(&device,nullptr,input.data(),960);
+        ok&=voice.m_outgoing.empty(); // Releasing PTT stops all new audio.
+        voice.setTransmitEnabled(true);
+        voice.captureCallback(&device,nullptr,nullptr,960);
+        ok&=voice.m_outgoing.empty();
+        voice.setTransmitEnabled(false);
+        voice.m_initialized.store(false); // Codec-only fixture owns no physical devices.
+        opus_encoder_destroy(voice.m_encoder); voice.m_encoder=nullptr;
+        for(auto& entry:voice.m_senders) { opus_decoder_destroy(entry.second->decoder);delete entry.second; }
+        voice.m_senders.clear();
+        return ok;
+    }
+};
 struct MenuBackgroundTestAccess {
     static Camera2D Camera(const MenuBackground& b) { return b.camera; }
     static int Subject(const MenuBackground& b) { return b.cameraSubject; }
@@ -44,6 +93,16 @@ struct MenuBackgroundTestAccess {
         background.camera={{offsetX,340},{600+offsetX,740},0,1};
     }
 };
+struct LobbyTestAccess {
+    static float Height(const LobbyScreen& lobby) { return lobby.previewBounds.height; }
+    static void Scroll(LobbyScreen& lobby,float amount) { lobby.ScrollSetup(amount); }
+    static float Offset(const LobbyScreen& lobby) { return lobby.setupScroll; }
+    static float Maximum(const LobbyScreen& lobby) { return lobby.SetupScrollMax(); }
+    static bool HiddenChip(const LobbyScreen& lobby) {
+        Rectangle local{0,24,268,34},r=lobby.SetupBounds(local);
+        return lobby.SetupHit(local,{r.x+10,r.y+2});
+    }
+};
 struct OfflineMenuTestAccess {
     static void Scroll(OfflineMenuScreen& menu,float amount) { menu.ScrollSetup(amount); }
     static float Offset(const OfflineMenuScreen& menu) { return menu.setupScroll; }
@@ -60,6 +119,13 @@ struct SkinTestPlayer : Player {
     Texture2D Texture(int slot) const { return weaponTextures[slot]; }
 };
 struct GameplayEffectsTestAccess {
+    static bool CanBag(const GameplayScreen& game) { return game.CanChangeBag(); }
+    static bool PickBag(GameplayScreen& game,int bag) { return game.SelectBag(bag); }
+    static int ActiveBag(const GameplayScreen& game) { return game.activeBag; }
+    static Vector2 BagHome(const GameplayScreen& game) { return game.bagSpawnPosition; }
+    static void BagMenu(GameplayScreen& game) { game.bagMenuOpen=true; }
+    static void Combat(GameplayScreen& game) { game.UpdateEquipmentCombat(); }
+    static void RemoteFlash(GameplayScreen& game,Vector2 target) { game.grenades.push_back({target,target,0,2,false,99,2}); }
     static size_t FeedCount(const GameplayScreen& game) { return game.killFeed.size(); }
     static int FeedWeapon(const GameplayScreen& game) { return game.killFeed.front().weapon; }
     static std::string FeedKiller(const GameplayScreen& game) { return game.killFeed.front().killer; }
@@ -109,6 +175,7 @@ ProximityVoiceChat proximityVoiceChat;
 bool proximityVoiceInitialized = false;
 bool (*getLocalPlayerPosCallback)(Vector2&) = nullptr;
 int main() {
+    check(VoiceTestAccess::ExerciseAudioPath(),"PTT gates capture, encodes/decodes audible PCM, drops duplicates and clears queued speech on release");
     SetTraceLogLevel(LOG_WARNING);
     SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(VIRTUAL_WIDTH, VIRTUAL_HEIGHT, "Vanta smoke test");
@@ -123,6 +190,163 @@ int main() {
         ExportImage(img, path); UnloadImage(img);
         BeginDrawing(); ClearBackground(BLACK); EndDrawing();
     };
+    {
+        auto savedPrefs=Settings::Get();auto savedSetup=Offline::Get();int previousSkin=NetworkManager::GetInstance().localWeaponSkin;
+        Settings::Get()=Settings::Preferences{};Offline::Get().mode=Offline::Mode::Training;Offline::Get().bots=3;
+        auto working=std::filesystem::current_path();auto fixture=working/"bin/bag-save-test";std::filesystem::create_directories(fixture);
+        {
+            GameplayScreen game(GameMode::PRACTICE);auto* actor=static_cast<Player*>(game.GetLocalPlayer());
+            check(actor->GetWeaponIndex()==0 && actor->GetBag().secondary==2,"bag one equips its primary and pistol sidearm");
+            actor->SelectEquipment(1);check(actor->GetWeaponIndex()==2,"secondary slot equips only the assigned sidearm");
+            actor->SelectEquipment(2);check(actor->GetMeleeVariant()==0 && actor->GetEquipmentSlot()==2,"slot three equips the generated combat knife");
+            auto* enemy=GameplayEffectsTestAccess::Bot(game,0);actor->SetPosition({2600,1600});enemy->SetPosition({2675,1600});enemy->ResetHealth(100);
+            for(int i=1;i<3;++i) GameplayEffectsTestAccess::Bot(game,i)->SetPosition({3500+i*200.0f,2200});
+            actor->SetAimTarget(enemy->GetPosition());
+            check(actor->Shoot(enemy->GetPosition()),"equipped melee can swing");GameplayEffectsTestAccess::Combat(game);
+            check(enemy->GetHealth()==45 && actor->GetProjectiles().empty(),"knife deals short-range damage without firing a bullet");
+            check(!actor->Shoot(enemy->GetPosition()),"knife swing respects melee cooldown");
+            GameplayEffectsTestAccess::Focus(game,actor->GetPosition(),.8f);game.Draw(target);capture("bin/bag-melee-gameplay-preview.png");
+            actor->UpdateWithoutInput(.51f);enemy->SetPosition({2525,1600});actor->Shoot({2800,1600});GameplayEffectsTestAccess::Combat(game);
+            check(enemy->GetHealth()==45,"melee swing cannot hit behind the attacker");
+            actor->UpdateWithoutInput(.51f);enemy->SetPosition({3000,1600});actor->Shoot({3100,1600});GameplayEffectsTestAccess::Combat(game);
+            check(enemy->GetHealth()==45,"melee swing cannot hit outside its short range");
+            actor->UpdateWithoutInput(.51f);enemy->SetPosition({2675,1600});check(actor->Shoot(enemy->GetPosition()),"knife can swing again after recovery");GameplayEffectsTestAccess::Combat(game);
+            check(enemy->IsDead() && GameplayEffectsTestAccess::FeedWeapon(game)==Bags::MeleeDamageId,"melee kill feed records a knife rather than a poison icon");
+            actor->SelectEquipment(0);actor->ResetHealth(100);actor->Shoot({3200,1600});int ammo=actor->GetAmmo();
+            actor->SetAimTarget({3200,1600});check(game.ThrowGrenade(0),"bag permits its equipped frag grenade");
+            float cooldown=game.GetGrenadeCooldown(0);auto home=GameplayEffectsTestAccess::BagHome(game);actor->SetPosition(home);
+            std::filesystem::current_path(fixture);
+            check(GameplayEffectsTestAccess::CanBag(game) && GameplayEffectsTestAccess::PickBag(game,1),"bag change succeeds at spawn/base");
+            check(actor->GetWeaponIndex()==3 && actor->GetBag().secondary==7,"bag two equips its assigned rifle and machine pistol");
+            check(game.GetGrenadeCooldown(0)==cooldown,"changing bags does not refill grenade cooldown");
+            check(GameplayEffectsTestAccess::PickBag(game,0) && actor->GetAmmo()==ammo,"changing back preserves spent primary ammo");
+            actor->SetPosition({home.x+900,home.y+600});
+            check(!GameplayEffectsTestAccess::CanBag(game) && !GameplayEffectsTestAccess::PickBag(game,2) && GameplayEffectsTestAccess::ActiveBag(game)==0,"bag changes are blocked away from the base");
+            actor->TakeDamage(10000);check(GameplayEffectsTestAccess::PickBag(game,2) && actor->IsDead(),"dead player can select the next bag without being healed");
+            std::filesystem::current_path(working);
+            GameplayEffectsTestAccess::Respawn(game);check(actor->GetWeaponIndex()==6 && actor->GetMeleeVariant()<0,"respawn applies selected bag three primary");
+            GameplayEffectsTestAccess::BagMenu(game);game.Draw(target);capture("bin/in-game-bags-preview.png");
+        }
+        {
+            GameplayScreen game(GameMode::PRACTICE);auto* actor=static_cast<Player*>(game.GetLocalPlayer());
+            actor->SetPosition({2600,1600});actor->SetAimTarget({2750,1600});
+            auto* closeBot=GameplayEffectsTestAccess::Bot(game,0);closeBot->ResetHealth(100);closeBot->SetPosition({2750,1600});
+            auto* distantBot=GameplayEffectsTestAccess::Bot(game,1);distantBot->SetPosition({3600,1600});
+            check(game.ThrowGrenade(2) && game.GetGrenadeCooldown(2)==15,"equipped flashbang throws and starts its cooldown");
+            GameplayEffectsTestAccess::Step(game,.81f);
+            check(actor->GetFlashBlind()>0 && closeBot->GetFlashBlind()>0 && distantBot->GetFlashBlind()==0,"flashbang blinds nearby thrower and bot within its range");
+            check(actor->GetHealth()==100 && closeBot->GetHealth()==100 && !closeBot->Shoot(actor->GetPosition()),"flashbang deals no damage and disrupts blinded bots");
+            game.Draw(target);capture("bin/flashbang-blind-preview.png");
+            actor->UpdateWithoutInput(3);check(actor->GetFlashBlind()==0,"flashbang vision recovers over time");
+            GameplayEffectsTestAccess::Reset(game);GameplayEffectsTestAccess::RemoteFlash(game,actor->GetPosition());
+            GameplayEffectsTestAccess::Step(game,.81f);check(actor->GetFlashBlind()>0 && actor->GetHealth()==100,"replicated flashbang blinds local receiver without damage");
+        }
+        std::filesystem::current_path(fixture);
+        auto& prefs=Settings::Get();prefs.activeBag=2;prefs.bags[2].primary=5;prefs.bags[2].secondary=7;
+        prefs.bags[2].primarySkin=2;prefs.bags[2].secondarySkin=1;prefs.bags[2].melee=1;prefs.bags[2].meleeSkin=3;
+        prefs.bags[2].grenade=false;prefs.bags[2].smoke=false;prefs.bags[2].flash=true;
+        check(Settings::Save(),"save configured bags and equipment");prefs=Settings::Preferences{};Settings::Load();
+        check(prefs.activeBag==2 && prefs.bags[2].primary==5 && prefs.bags[2].secondary==7 && prefs.bags[2].primarySkin==2 && prefs.bags[2].secondarySkin==1 && prefs.bags[2].melee==1 && prefs.bags[2].meleeSkin==3 && !prefs.bags[2].smoke && !prefs.bags[2].grenade && prefs.bags[2].flash,"all bag slots, per-bag skins and utility choices survive save/load");
+        LoadoutStorage storage;storage.Open();storage.SelectSlot(0);storage.EquipGun(2);
+        check(prefs.bags[2].primary==5,"storage refuses a pistol in the primary slot");
+        storage.EquipGun(3,2);check(prefs.bags[2].primary==3 && prefs.bags[2].primarySkin==2 && prefs.bags[0].primary==0,"storage equips one bag without changing other bags");
+        std::filesystem::current_path(working);
+        for(int bag=0;bag<3;++bag) {
+            prefs.activeBag=bag;storage.Open();storage.SelectSlot(0);
+            BeginTextureMode(target);storage.Draw(GetFontDefault());EndTextureMode();capture(TextFormat("bin/storage-bag%d-preview.png",bag+1));
+        }
+        storage.SelectSlot(2);BeginTextureMode(target);storage.Draw(GetFontDefault());EndTextureMode();capture("bin/storage-melee-preview.png");
+        storage.SelectSlot(5);BeginTextureMode(target);storage.Draw(GetFontDefault());EndTextureMode();capture("bin/storage-flashbang-preview.png");
+        Settings::Get()=savedPrefs;Offline::Get()=savedSetup;NetworkManager::GetInstance().localWeaponSkin=previousSkin;
+    }
+    {
+        auto& registry=MapRegistry::GetInstance();
+        auto names=registry.GetMapNames();
+        check(names.size()==3 && std::find(names.begin(),names.end(),"Forest")==names.end() && std::find(names.begin(),names.end(),"Forest2")==names.end(),
+              "new arenas replace both forests in the shared online/offline map selector");
+        auto& network=NetworkManager::GetInstance();auto selected=network.selectedMapName;
+        auto setup=Offline::Get();
+        for(const char* name:{"AbandonedFoundry","DesertOutpost"}) {
+            auto* map=registry.GetMap(name);
+            check(map && map->tmxMap && map->pixelWidth==4800 && map->pixelHeight==3200 && map->scene.spawnPoints.size()==16,
+                  "new arena loads editable TMX art and sixteen authored spawns");
+            network.selectedMapName=name;Offline::Get().mode=Offline::Mode::Deathmatch;
+            GameplayScreen game(GameMode::PRACTICE);auto* actor=game.GetLocalPlayer();
+            for(auto spawn:map->scene.spawnPoints) {
+                actor->SetPosition(spawn.position);GameplayEffectsTestAccess::Resolve(game,actor);
+                auto p=actor->GetPosition();check(std::hypot(p.x-spawn.position.x,p.y-spawn.position.y)<.1f,"new arena spawn clears all cover and wall collision");
+            }
+            for(int team=1;team<=2;++team) {
+                auto p=GameplayEffectsTestAccess::Base(game,team);
+                check(std::abs(p.x-map->pixelWidth*(team==1?.16f:.84f))<1,"flag base remains in its open delivery lane");
+            }
+            int probes=0;
+            for(uint32_t i=0;i<map->tmxMap->layersLength;++i) {
+                const auto& layer=map->tmxMap->layers[i];
+                if(layer.type!=LAYER_TYPE_OBJECT_GROUP || !layer.name || std::string(layer.name)!="collision") continue;
+                const auto& objects=layer.exact.objectGroup;
+                for(uint32_t j=0;j<objects.objectsLength;++j) {
+                    const auto& o=objects.objects[j];
+                    if(o.x<320 || o.x+o.width>4400) continue;
+                    Rectangle obstacle{(float)o.x,(float)o.y,(float)o.width,(float)o.height};
+                    for(Vector2 direction:{Vector2{1,0},Vector2{-1,0},Vector2{0,1},Vector2{0,-1}}) for(float jump:{0.0f,160.0f}) {
+                        Vector2 feetCenter{obstacle.x+obstacle.width*.5f,obstacle.y+obstacle.height*.5f};
+                        if(direction.x) feetCenter.x=direction.x>0?obstacle.x-40:obstacle.x+obstacle.width+40;
+                        else feetCenter.y=direction.y>0?obstacle.y-40:obstacle.y+obstacle.height+40;
+                        Vector2 start{feetCenter.x,feetCenter.y-actor->GetFeetOffset()+3};
+                        actor->SetPosition(start);actor->SetJumpHeight(0);float depth=actor->GetDepthY();
+                        actor->SetJumpHeight(jump);check(actor->GetDepthY()==depth,"jumping keeps character depth at the ground projection");
+                        actor->SetPosition({start.x+direction.x*240,start.y+direction.y*240});GameplayEffectsTestAccess::Move(game,actor,start);
+                        auto feet=actor->GetCollisionBounds();
+                        check(!CheckCollisionRecs(feet,obstacle),"walking and jumping from every side cannot enter prop/wall collision");
+                        if(direction.x>0) check(feet.x+feet.width<=obstacle.x+.1f,"left contact cannot tunnel across cover");
+                        if(direction.x<0) check(feet.x>=obstacle.x+obstacle.width-.1f,"right contact cannot tunnel across cover");
+                        if(direction.y>0) check(feet.y+feet.height<=obstacle.y+.1f,"north contact cannot tunnel across cover");
+                        if(direction.y<0) check(feet.y>=obstacle.y+obstacle.height-.1f,"south contact cannot tunnel across cover");
+                    }
+                    ++probes;
+                }
+            }
+            check(probes>=20,"new arena collision check covers walls and all props");actor->SetJumpHeight(0);
+            Camera2D camera{{650,340},{2400,1600},0,.20f};Rectangle view{0,0,4800,3200};
+            BeginTextureMode(target);ClearBackground({10,16,22,255});BeginMode2D(camera);
+            DrawMapWithMaterials(map->tmxMap,&camera,&view);DrawMapEffects(map->tmxMap,2,view);EndMode2D();EndTextureMode();
+            capture(TextFormat("bin/%s-map-preview.png",name));
+            for(uint32_t i=0;i<map->tmxMap->layersLength;++i) {
+                const auto& layer=map->tmxMap->layers[i];
+                if(layer.type!=LAYER_TYPE_OBJECT_GROUP || !layer.classString || std::string(layer.classString)!="decor") continue;
+                for(uint32_t j=0;j<layer.exact.objectGroup.objectsLength;++j) {
+                    const auto& prop=layer.exact.objectGroup.objects[j];
+                    check(prop.propertiesLength>0,"every new arena prop authors its true ground edge");
+                    float ground=MapObjectGroundDepth(prop);
+                    bool aligned=false;
+                    for(uint32_t k=0;k<map->tmxMap->layersLength;++k) {
+                        const auto& contacts=map->tmxMap->layers[k];
+                        if(contacts.type!=LAYER_TYPE_OBJECT_GROUP || !contacts.name || std::string(contacts.name)!="collision") continue;
+                        for(uint32_t q=0;q<contacts.exact.objectGroup.objectsLength;++q) {
+                            const auto& foot=contacts.exact.objectGroup.objects[q];
+                            aligned|=foot.name && std::string(foot.name)=="Cover foot" && std::abs(foot.y+foot.height-ground)<.01;
+                        }
+                    }
+                    check(aligned,"prop depth matches collision ground edge rather than transparent texture padding");
+                    if(std::string(name)=="AbandonedFoundry" && prop.name && std::string(prop.name)=="Cover 2" && j==8) {
+                        float center=1870;
+                        for(int side:{-1,1}) {
+                            actor->SetPosition({center,ground+(side>0?8:-110)-actor->GetFeetOffset()});
+                            actor->SetJumpHeight(0);GameplayEffectsTestAccess::Resolve(game,actor);
+                            check(side>0?actor->GetDepthY()>ground:actor->GetDepthY()<ground,"rack front/back contact sorts on the correct side");
+                            GameplayEffectsTestAccess::Focus(game,{center,ground-65},1.2f);
+                            game.Draw(target);capture(side>0?"bin/pipe-rack-front-contact.png":"bin/pipe-rack-back-contact.png");
+                        }
+                    }
+                }
+            }
+            actor->SetPosition({2400,1472});GameplayEffectsTestAccess::Focus(game,{2400,1150},.60f);GameplayEffectsTestAccess::Time(game,2);
+            game.Draw(target);capture(TextFormat("bin/%s-gameplay-preview.png",name));
+        }
+        check(registry.GetMap("Forest")==registry.GetMap("AbandonedFoundry") && registry.GetMap("Forest2")==registry.GetMap("DesertOutpost"),"old map references migrate to their replacement arenas");
+        network.selectedMapName=selected;Offline::Get()=setup;
+    }
     {
         auto* map=MapRegistry::GetInstance().GetMap("MagmaRift");
         check(map && map->tmxMap && map->pixelWidth==4800 && map->pixelHeight==3200,"new TMX arena is discovered and loads at its authored size");
@@ -218,7 +442,7 @@ int main() {
         }
         check(GameplayEffectsTestAccess::FeedCount(arena)==5 && GameplayEffectsTestAccess::FeedKiller(arena)=="rexxyqt","offline feed shows killer and keeps the latest five kills");
         actor->SwitchWeapon(2);
-        check(GameplayEffectsTestAccess::FeedWeapon(arena)==4,"switching guns never changes a recorded kill icon");
+        check(GameplayEffectsTestAccess::FeedWeapon(arena)==WeaponCount-1,"switching guns never changes a recorded kill icon");
         GameplayEffectsTestAccess::FeedTime(arena,.25f);
         arena.Draw(target); capture("bin/kill-feed-preview.png");
         for(int i=0;i<3;++i) { targetBot->ResetHealth(100); GameplayEffectsTestAccess::Kill(arena,actor,targetBot); }
@@ -319,33 +543,40 @@ int main() {
         for(int slot=0;slot<WeaponCount;++slot) {
             check(actor.Texture(slot).id==LoadWeaponSlotTexture(slot,preview.GetPackedSkins()).id,"player uses each independently selected texture");
             check(LoadWeaponSlotTexture(slot,0).id!=0,"every gun has a valid default texture");
+            if(slot>=5) {
+                Image art=LoadImageFromTexture(actor.Texture(slot));
+                check(GetImageColor(art,0,0).a==0,"new gun sprite preserves transparent background");
+                UnloadImage(art);
+            }
         }
         BeginTextureMode(target); ClearBackground({10,18,27,255});
         for(int slot=0;slot<WeaponCount;++slot) for(int skin=0;skin<WeaponSkinCount;++skin) {
-            Rectangle card{slot*260.0f,skin*158.0f+35,260,153};
+            Rectangle card{slot*(1300.0f/WeaponCount),skin*158.0f+35,1300.0f/WeaponCount,153};
             DrawText(WeaponShortName(slot),(int)card.x+12,(int)card.y,16,UiTheme::AccentGold());
             Texture2D texture=LoadWeaponSlotTexture(slot,skin); auto geometry=GetWeaponGeometry(texture,slot);
             check(texture.id && geometry.bounds.width>10 && geometry.bounds.height>10,"all gun skins have visible sprites");
-            float fit=std::min(225/geometry.bounds.width,85/geometry.bounds.height);
-            Rectangle destination{card.x+130,card.y+66,geometry.bounds.width*fit,geometry.bounds.height*fit};
+            float fit=std::min((card.width-24)/geometry.bounds.width,85/geometry.bounds.height);
+            Rectangle destination{card.x+card.width/2,card.y+66,geometry.bounds.width*fit,geometry.bounds.height*fit};
             DrawWeaponSkinTexture(texture,geometry.bounds,destination,{destination.width/2,destination.height/2},0,slot,skin);
-            DrawText(WeaponSkinLabel(slot,skin),(int)card.x+12,(int)card.y+118,12,LIGHTGRAY);
+            DrawText(WeaponSkinLabel(slot,skin),(int)card.x+12,(int)card.y+118,10,LIGHTGRAY);
         }
         EndTextureMode(); capture("bin/arsenal-skins-preview.png");
         Image rendered=LoadImageFromTexture(target.texture); ImageFlipVertical(&rendered);
         for(int slot=0;slot<WeaponCount;++slot) for(int skin=0;skin<WeaponSkinCount;++skin) {
             int visible=0;
-            for(int y=skin*158+63;y<skin*158+145;++y) for(int x=slot*260+10;x<slot*260+250;++x) {
+            for(int y=skin*158+63;y<skin*158+145;++y) for(int x=(int)(slot*(1300.0f/WeaponCount))+10;x<(int)((slot+1)*(1300.0f/WeaponCount))-10;++x) {
                 Color color=GetImageColor(rendered,x,y);
                 if(color.r>35 || color.g>40 || color.b>50) ++visible;
             }
             check(visible>60,"every skin actually draws a visible weapon in the gallery");
         }
         UnloadImage(rendered);
-        for(int weapon : {3,4}) {
+        for(int weapon : {3,4,5,6,7}) {
             actor.ResetHealth(100); actor.SwitchWeapon(weapon);
             check(actor.GetAmmo()==Weapons[weapon].maxAmmo,"new gun starts with its own magazine size");
+            auto count=actor.GetProjectiles().size();
             check(actor.Shoot({1000,150}),"new weapon fires");
+            check(actor.GetProjectiles().size()-count==(weapon==6?7:1),"double barrel fires seven pellets while other guns fire one bullet");
             check(actor.GetProjectiles().back()->GetWeaponIndex()==weapon,"projectile remembers the fired gun for kill attribution");
             check(actor.GetAmmo()==Weapons[weapon].maxAmmo-1 && actor.GetProjectiles().back()->GetDamage()==Weapons[weapon].damage,"new gun consumes ammo and uses configured projectile damage");
             check(!actor.Shoot({1000,150}),"new gun respects fire cooldown");
@@ -354,6 +585,8 @@ int main() {
             RemotePlayer remote({900,120},CharacterPreview::BodyPath(1),preview.GetPackedSkins());
             remote.ApplyNetworkUpdate({900,120},0,weapon,-1,100,0,0,preview.GetPackedSkins());
             check(remote.GetWeaponIndex()==weapon,"online player can equip new weapon slots");
+            remote.ShootInDirection({-1,0});
+            check(remote.GetProjectiles().size()==(weapon==6?7:1),"online visuals preserve new gun projectile counts");
         }
         BeginTextureMode(target); ClearBackground({10,18,27,255});
         DrawText("ASSAULT RIFLE / SNIPER  -  GRIP, FLASH AND TRACER",36,24,22,UiTheme::AccentGold());
@@ -364,6 +597,16 @@ int main() {
             actor.SetAimTarget(aim); actor.Shoot(aim); for(auto& bullet:actor.GetProjectiles()) bullet->Update(0.05f); actor.Draw();
         }
         EndTextureMode(); capture("bin/new-weapons-alignment-preview.png");
+        BeginTextureMode(target); ClearBackground({10,18,27,255});
+        for(int column=0;column<3;++column) for(int skin=0;skin<WeaponSkinCount;++skin) {
+            int slot=column+5;float x=column*430.0f,y=skin*162.0f;
+            DrawText(WeaponName(slot),(int)x+20,(int)y+8,18,UiTheme::AccentGold());
+            auto texture=LoadWeaponSlotTexture(slot,skin);auto bounds=GetWeaponGeometry(texture,slot).bounds;
+            float fit=std::min(380/bounds.width,95/bounds.height);
+            DrawWeaponSkinTexture(texture,bounds,{x+215,y+85,bounds.width*fit,bounds.height*fit},{bounds.width*fit/2,bounds.height*fit/2},0,slot,skin);
+            DrawText(WeaponSkinLabel(slot,skin),(int)x+20,(int)y+140,14,LIGHTGRAY);
+        }
+        EndTextureMode();capture("bin/three-new-guns-skins-preview.png");
         for(int slot=0;slot<WeaponCount;++slot) {
             preview.SetSelectedWeaponSlot(slot);
             BeginTextureMode(target); ClearBackground({10,18,27,255});
@@ -431,7 +674,14 @@ int main() {
         nm.localUsername = "Player"; nm.localSkinIndex = 1;
         if (!nm.HostRoom(17777)) return 10;
         nm.SetPlayerReady(true);
+        nm.UpdateLobbySettings(OnlineGameMode::TEAM_DEATHMATCH,300,0,8);
         LobbyScreen lobby;
+        check(LobbyTestAccess::Height(lobby)>=240,"online lobby uses the enlarged map preview");
+        LobbyTestAccess::Scroll(lobby,10000);
+        check(LobbyTestAccess::Offset(lobby)==LobbyTestAccess::Maximum(lobby) && !LobbyTestAccess::HiddenChip(lobby),"online settings scroll clamps and clips hidden controls");
+        lobby.Draw(target); capture("bin/lobby-scrolled-preview.png");
+        LobbyTestAccess::Scroll(lobby,-10000);
+        check(LobbyTestAccess::Offset(lobby)==0,"online settings return to the top");
         for (int i=0; i<180; ++i) lobby.Update(1.0f/60);
         lobby.Draw(target); capture("bin/lobby-ffa-preview.png");
         nm.UpdateLobbySettings(OnlineGameMode::ELIMINATION,0,0,8);
@@ -558,6 +808,15 @@ int main() {
         Offline::Get().mode=Offline::Mode::Deathmatch;
         Offline::Get().roundLimit=3;
         {
+            GameplayScreen game(GameMode::PRACTICE);
+            auto* bot=GameplayEffectsTestAccess::Bot(game,0);
+            bot->TakeDamage(10000); bot->ResetDeathTimer();
+            GameplayEffectsTestAccess::Practice(game,7.9f);
+            check(bot->IsDead(),"offline flag bot cannot respawn before eight seconds");
+            GameplayEffectsTestAccess::Practice(game,.11f);
+            check(!bot->IsDead(),"offline flag bot respawns after eight seconds");
+        }
+        {
             GameplayScreen game(GameMode::PRACTICE); auto* player=game.GetLocalPlayer();
             Vector2 home=GameplayEffectsTestAccess::Base(game,1),enemyBase=GameplayEffectsTestAccess::Base(game,2);
             Vector2 midfield{(home.x+enemyBase.x)/2,home.y-250};
@@ -616,7 +875,7 @@ int main() {
             check(std::abs(bot->GetPosition().x-target.x)<before,"bot carrier advances toward enemy base");
             bot->SetPosition(target); GameplayEffectsTestAccess::Flags(game,0.1f);
             check(GameplayEffectsTestAccess::Score(game,2)==1,"bot delivers flag into enemy base");
-            bot->TakeDamage(10000); GameplayEffectsTestAccess::Practice(game,4.1f);
+            bot->TakeDamage(10000); GameplayEffectsTestAccess::Practice(game,8.1f);
             check(!bot->IsDead() && std::hypot(bot->GetPosition().x-botBase.x,bot->GetPosition().y-botBase.y)<111,"flag bots respawn at their own visible base");
             game.GetLocalPlayer()->SetPosition(botBase); GameplayEffectsTestAccess::Respawn(game);
             check(std::hypot(game.GetLocalPlayer()->GetPosition().x-target.x,game.GetLocalPlayer()->GetPosition().y-target.y)<111,"player respawn belongs to own team base");
@@ -666,6 +925,17 @@ int main() {
             GameplayScreen effects(GameMode::PRACTICE);
             auto* victim=effects.GetLocalPlayer();
             Vector2 origin=victim->GetPosition();
+            auto* nearBot=GameplayEffectsTestAccess::Bot(effects,0);
+            auto* farBot=GameplayEffectsTestAccess::Bot(effects,1);
+            nearBot->ResetHealth(100); farBot->ResetHealth(100);
+            nearBot->SetPosition({origin.x+210,origin.y}); farBot->SetPosition({origin.x+240,origin.y});
+            victim->SetAimTarget(origin);
+            check(effects.ThrowGrenade(0),"throw expanded blast grenade");
+            GameplayEffectsTestAccess::Step(effects,.81f);
+            check(nearBot->GetHealth()==60 && farBot->GetHealth()==100,"larger blast damages at 210 units and stops before 240");
+            nearBot->ResetHealth(100);farBot->ResetHealth(100);
+            nearBot->SetPosition({origin.x+1000,origin.y});farBot->SetPosition({origin.x+1400,origin.y});
+            GameplayEffectsTestAccess::Reset(effects);
             victim->SetAimTarget(origin);
             check(effects.ThrowGrenade(1),"throw poison smoke");
             GameplayEffectsTestAccess::Step(effects,0.8f);
@@ -702,7 +972,9 @@ int main() {
             GameplayEffectsTestAccess::Step(effects,0.91f);
             check(GameplayEffectsTestAccess::Shake(effects)>0,"near replicated blast shakes camera");
             effects.Draw(target); capture("bin/explosion-preview.png");
-            GameplayEffectsTestAccess::Step(effects,0.9f);
+            GameplayEffectsTestAccess::Step(effects,0.24f);
+            effects.Draw(target); capture("bin/gray-explosion-preview.png");
+            GameplayEffectsTestAccess::Step(effects,0.66f);
             effects.Draw(target); capture("bin/explosion-cracks-preview.png");
             check(GameplayEffectsTestAccess::Shake(effects)==0,"camera shake decays");
         }

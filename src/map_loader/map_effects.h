@@ -6,3 +6,6 @@ void DrawMapEffects(const TmxMap* map, float time, Rectangle viewport);
 bool IsMapGroundLayer(const TmxLayer& layer);
 void DrawMapLayerWithMaterial(const TmxMap* map,const Camera2D* camera,const Rectangle* viewport,const TmxLayer* layer);
 void DrawMapWithMaterials(const TmxMap* map,const Camera2D* camera,const Rectangle* viewport);
+
+// Ground depth explicitly authored independently of a sprite atlas's padding.
+float MapObjectGroundDepth(const TmxObject& object);

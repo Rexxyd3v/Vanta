@@ -5,6 +5,7 @@
 #include "menu_background.h"
 #include "../ui/character_preview.h"
 #include "../ui/weapon_skin_preview.h"
+#include "../ui/loadout_storage.h"
 #include <string>
 #include <raylib.h>
 
@@ -21,6 +22,8 @@ public:
     bool ShouldGoToLobby() const { return goToLobby; }
 
 private:
+    LoadoutStorage storage;
+    bool storageOpen=false;
     bool startGame;
     bool goToLobby;
     int activeInput; // 0 = none, 1 = username, 2 = join address

@@ -3,6 +3,9 @@
 #include "../ui/game_settings.h"
 #include "../rules/match_rules.h"
 #include "../rules/grenade_rules.h"
+#include "../ui/explosion_effect.h"
+#include "../ui/equipment_art.h"
+#include "../entities/bag_catalog.h"
 #include <algorithm>
 #include <cmath>
 
@@ -18,7 +21,7 @@ float Hash(int i) { return std::fmod(std::abs(std::sin(i*127.1f+311.7f)*43758.54
 }
 
 bool GameplayScreen::ThrowGrenade(int kind) {
-    if (kind < 0 || kind > 1 || player->IsDead() || isSpectating || matchEndTimer > 0 ||
+    if (kind < 0 || kind > 2 || !Bags::UtilityEquipped(player->GetBag(),kind) || player->IsDead() || isSpectating || matchEndTimer > 0 ||
         isPaused || Settings::BlocksInput() || grenadeCooldown[kind] > 0 || grenades.size() >= 32) return false;
     auto& nm = NetworkManager::GetInstance();
     Vector2 start = player->GetPosition(), target = player->GetAimTarget();
@@ -26,7 +29,7 @@ bool GameplayScreen::ThrowGrenade(int kind) {
     if (length > 650) { target.x = start.x+dx/length*650; target.y = start.y+dy/length*650; }
     target.x = std::clamp(target.x, 0.0f, worldWidth); target.y = std::clamp(target.y, 0.0f, worldHeight);
     grenades.push_back({start, target, 0, kind, true, nm.GetLocalPlayerID(), player->GetTeamID()});
-    grenadeCooldown[kind] = kind == 0 ? 8.0f : 12.0f;
+    grenadeCooldown[kind] = kind == 0 ? 8.0f : kind==1?12.0f:15.0f;
     if (currentMode == GameMode::ONLINE) {
         PacketPlayerGrenade p{}; p.header = {PacketType::PLAYER_GRENADE, nm.GetLocalPlayerID()};
         p.start = start; p.target = target; p.kind = (uint8_t)kind; nm.SendPacket(&p, sizeof(p), true);
@@ -63,9 +66,9 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
     auto& nm = NetworkManager::GetInstance();
     explosionShake=std::max(0.0f,explosionShake-dt*26);
     poisonExposure=std::max(0.0f,poisonExposure-dt*2);
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 3; ++i) {
         grenadeCooldown[i] = std::max(0.0f, grenadeCooldown[i] - dt);
-        if (allowInput && Settings::Pressed(i == 0 ? Settings::Grenade : Settings::Smoke)) ThrowGrenade(i);
+        if (allowInput && Settings::Pressed(i == 0 ? Settings::Grenade : i==1?Settings::Smoke:Settings::Flash)) ThrowGrenade(i);
     }
     for (auto& g : grenades) {
         float before = g.age; g.age += dt;
@@ -86,6 +89,19 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
             continue;
         }
         if (before>=GrenadeRules::Fuse || g.age<GrenadeRules::Fuse) continue;
+        if(g.kind==2) {
+            if(matchEndTimer>0) continue;
+            auto blind=[&](Character* actor) {
+                if(actor->IsDead()) return;
+                Vector2 p=actor->GetPosition(),look=actor->GetAimTarget();
+                float dx=g.target.x-p.x,dy=g.target.y-p.y;
+                bool facing=(look.x-p.x)*dx+(look.y-p.y)*dy>=0;
+                actor->ApplyFlash(GrenadeRules::FlashDuration(std::hypot(dx,dy),facing));
+            };
+            blind(player);
+            if(currentMode==GameMode::PRACTICE) for(auto& bot:bots) blind(bot.get());
+            continue;
+        }
         // Remote explosions also shake the local camera, with a smooth proximity falloff.
         explosionShake=std::max(explosionShake,GrenadeRules::ShakeStrength(Distance(player->GetPosition(),g.target)));
         if (!g.local || matchEndTimer>0 || (currentMode==GameMode::PRACTICE && offlineRoundOver)) continue;
@@ -107,33 +123,13 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
         else for (auto* remote : remotePlayers) damage(remote, remote->peerID);
     }
     grenades.erase(std::remove_if(grenades.begin(), grenades.end(), [](const GrenadeEffect& g) {
-        return g.age > GrenadeRules::Fuse+(g.kind==0 ? GrenadeRules::BlastLifetime : GrenadeRules::SmokeDuration);
+        return g.age > GrenadeRules::Fuse+(g.kind==0 ? GrenadeRules::BlastLifetime : g.kind==1?GrenadeRules::SmokeDuration:1.5f);
     }), grenades.end());
 }
 
 void GameplayScreen::DrawGrenadeScars() {
-    for (const auto& g : grenades) {
-        float age=g.age-GrenadeRules::Fuse;
-        if (g.kind!=0 || age<0) continue;
-        float opacity=std::clamp((GrenadeRules::BlastLifetime-age)/1.2f,0.0f,1.0f);
-        float spread=std::min(1.0f,age/0.14f);
-        DrawEllipse((int)g.target.x,(int)g.target.y,100*spread,65*spread,Fade(Color{24,30,19,255},opacity*0.55f));
-        for (int branch=0;branch<9;++branch) {
-            float angle=branch*6.28318f/9+Hash(branch)*0.35f;
-            Vector2 last=g.target;
-            for (int segment=1;segment<=4;++segment) {
-                float r=segment*(22+Hash(branch+23)*13)*spread;
-                Vector2 next=Offset(g.target,angle+(Hash(branch*5+segment)-0.5f)*0.38f,r,0.7f);
-                DrawLineEx(last,next,5-segment*0.7f,Fade(Color{14,22,16,255},opacity));
-                if (age<0.65f) DrawLineEx({last.x,last.y-1},{next.x,next.y-1},1.2f,Fade(PoisonGreen,opacity*(1-age/0.65f)));
-                if (segment==2 || segment==3) {
-                    Vector2 fork=Offset(next,angle+(branch%2 ? 0.7f : -0.7f),24*spread,0.7f);
-                    DrawLineEx(next,fork,1.5f,Fade(Color{14,22,16,255},opacity));
-                }
-                last=next;
-            }
-        }
-    }
+    for(const auto& g:grenades) if(g.kind==0)
+        ExplosionFx::Scorch(g.target,g.age-GrenadeRules::Fuse,GrenadeRules::BlastLifetime);
 }
 
 void GameplayScreen::DrawGrenades() {
@@ -144,41 +140,19 @@ void GameplayScreen::DrawGrenades() {
         if (t < 1) {
             DrawEllipse((int)p.x, (int)p.y+12, 13, 6, Fade(BLACK, 0.3f));
             p.y -= std::sin(t*3.14159f)*110;
-            DrawCircleV(p, 10, {31, 70, 30, 255});
-            DrawCircleLines((int)p.x, (int)p.y, 10, PoisonGreen);
-            DrawRectangle((int)p.x-5, (int)p.y-14, 10, 5, PoisonGreen);
-            DrawLineEx({p.x-4,p.y-3}, {p.x+4,p.y+3}, 3, PoisonGreen);
-            DrawCircleLines((int)g.target.x, (int)g.target.y, 18, Fade(PoisonGreen, 0.45f));
+            DrawEquipmentArt(false,g.kind,0,{p.x-12,p.y-18,24,36},g.age*320);
+            DrawCircleLines((int)g.target.x, (int)g.target.y, 18, Fade(g.kind==1?PoisonGreen:Color{220,225,234,255}, 0.45f));
         } else if (g.kind == 0) {
+            ExplosionFx::Draw(p,g.age-GrenadeRules::Fuse,effects);
+        } else if(g.kind==2) {
             float age=g.age-GrenadeRules::Fuse;
-            if (age>1.45f) continue;
-            float fade=std::clamp(1-age/1.45f,0.0f,1.0f);
-            // Dark pressure cloud, a bright white-hot core, and a fast expanding shockwave.
-            DrawCircleGradient(p,65+age*100,Fade(Color{33,41,27,255},fade*0.72f),Fade(BLACK,0));
-            if (age<0.48f) {
-                float flash=1-age/0.48f;
-                DrawCircleGradient(p,50+90*(1-flash),Fade(PoisonGreen,flash*0.95f),Fade(PoisonGreen,0));
-                DrawCircleGradient(p,45*flash,Fade(Color{249,255,203,255},flash),Fade(PoisonGreen,0));
-            }
-            if (effects && age<0.55f) {
-                float radius=25+age*430;
-                DrawRing(p,radius-4,radius,0,360,96,Fade(Color{220,255,167,255},1-age/0.55f));
-            }
-            int count=effects ? 34 : 12;
-            for (int i=0;i<count;++i) {
-                float angle=Hash(i+9)*6.28318f,speed=100+Hash(i+45)*280;
-                float drag=1-std::exp(-age*2.8f);
-                Vector2 ground=Offset(p,angle,speed*drag,0.7f), shard=ground;
-                float lift=std::max(0.0f,(90+Hash(i+3)*130)*age-170*age*age);
-                shard.y-=lift;
-                DrawEllipse((int)ground.x,(int)ground.y,5*fade,2*fade,Fade(BLACK,fade*0.35f));
-                Color color=i%3 ? Color{62,70,48,255} : PoisonGreen;
-                if (age<0.65f && effects) DrawLineEx(Offset(shard,angle+3.14159f,16*fade),shard,2,Fade(PoisonGreen,fade));
-                DrawPoly(shard,3,4+Hash(i+10)*5,i*37+age*300,Fade(color,fade));
-            }
-            if (effects) for (int i=0;i<8;++i) {
-                Vector2 puff=Offset(p,i*2.39996f,40+age*90,0.6f); puff.y-=age*55;
-                DrawCircleGradient(puff,24+age*35,Fade(Color{63,77,47,255},fade*0.38f),Fade(BLACK,0));
+            if(age<.45f) {
+                float glow=1-age/.45f;
+                BeginBlendMode(BLEND_ADDITIVE);
+                DrawCircleGradient(p,80+age*480,Fade(Color{237,244,255,255},glow*.9f),Fade(WHITE,0));
+                DrawRing(p,20+age*500,24+age*500,0,360,64,Fade(WHITE,glow));
+                DrawLineEx({p.x-120*glow,p.y},{p.x+120*glow,p.y},3*glow,Fade(WHITE,glow));
+                EndBlendMode();
             }
         } else {
             float age=g.age-GrenadeRules::Fuse,radius=GrenadeRules::SmokeRadius(age);

@@ -1,4 +1,5 @@
 #include "weapon_geometry.h"
+#include "weapon_catalog.h"
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -22,9 +23,9 @@ WeaponGeometry GetWeaponGeometry(Texture2D texture,int slot) {
                     left=std::min(left,x); top=std::min(top,y); bottom=std::max(bottom,y);
                 }
                 geometry.bounds={(float)left,(float)top,(float)(right-left+1),(float)(bottom-top+1)};
-                const float visibleWidth[]={1000,1250,640,1100,1450};
-                const Vector2 grips[]={{0.34f,0.70f},{0.28f,0.75f},{0.22f,0.73f},{0.33f,0.65f},{0.27f,0.80f}};
-                int weapon=std::clamp(slot,0,4);
+                const float visibleWidth[]={1000,1250,640,1100,1450,1120,1120,760};
+                const Vector2 grips[]={{0.34f,0.70f},{0.28f,0.75f},{0.22f,0.73f},{0.33f,0.65f},{0.27f,0.80f},{0.34f,0.70f},{0.36f,0.70f},{0.42f,0.64f}};
+                int weapon=std::clamp(slot,0,WeaponCount-1);
                 geometry.pivot={left+geometry.bounds.width*grips[weapon].x,top+geometry.bounds.height*grips[weapon].y};
                 geometry.scale=visibleWidth[weapon]/geometry.bounds.width;
                 float sum=0,count=0;

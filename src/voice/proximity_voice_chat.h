@@ -48,6 +48,7 @@ public:
     int getAudiblePlayerCount() const;
 
 private:
+    friend struct VoiceTestAccess;
     // ---- miniaudio callbacks ----
     static void captureCallback(ma_device* dev, void* pOut, const void* pIn, ma_uint32 frames);
     static void playbackCallback(ma_device* dev, void* pOut, const void* pIn, ma_uint32 frames);
@@ -67,7 +68,7 @@ private:
         OpusDecoder* decoder  = nullptr;
         std::queue<VoiceFrame> jitter;
         std::mutex            jitterMtx;
-        uint64_t              lastHeardMs = 0;
+        std::atomic<uint64_t> lastHeardMs{0};
         uint16_t              lastSeq     = 0;
         // Decoded PCM ring buffer for playback callback
         std::vector<float>    pcmRing;
@@ -101,6 +102,8 @@ private:
 
     // Sequence counter for outgoing packets
     uint16_t m_sendSeq = 0;
+    std::mutex m_outgoingMtx;
+    std::queue<PacketVoiceData> m_outgoing;
 
     static constexpr uint64_t SPEAK_TIMEOUT_MS = 800;
 };

@@ -2,11 +2,18 @@
 #include "../src/rules/grenade_rules.h"
 #include "../src/ui/offline_setup.h"
 #include "../src/entities/weapon_catalog.h"
+#include "../src/entities/bag_catalog.h"
 #include <cstdlib>
 #include <iostream>
 static void check(bool ok, const char* label) { if (!ok) { std::cerr << label << '\n'; std::exit(1); } }
 int main() {
-    std::array<int,WeaponCount> choices{1,2,3,0,2};
+    auto bags=Bags::Defaults();
+    for(auto& bag:bags) check(Bags::IsPrimary(bag.primary) && Bags::IsSecondary(bag.secondary),"every default bag has correctly categorized weapons");
+    bags[0].primary=2;bags[0].secondary=4;bags[0].melee=99;bags[0].primarySkin=8;Bags::Normalize(bags[0]);
+    check(bags[0].primary==0 && bags[0].secondary==2 && bags[0].melee==1 && bags[0].primarySkin==3,"invalid bag equipment normalizes to legal storage slots");
+    check(GrenadeRules::FlashDuration(100)>GrenadeRules::FlashDuration(400) && GrenadeRules::FlashDuration(600)==0,"flashbang strength falls off with distance");
+    check(GrenadeRules::FlashDuration(100,true)>GrenadeRules::FlashDuration(100,false),"looking away reduces flash duration");
+    std::array<int,WeaponCount> choices{1,2,3,0,2,3,2,1};
     int encoded=PackWeaponSkins(choices);
     for(int i=0;i<WeaponCount;++i) check(WeaponSkinSelection(encoded,i)==choices[i],"mixed per-gun selections survive encoding");
     for(int i=0;i<WeaponCount;++i) check(WeaponSkinSelection(2,i)==2,"legacy shared skin ID remains compatible");
@@ -19,6 +26,9 @@ int main() {
     check(!Rules::CanRespawn(false, true, 20), "no post-match respawn");
     check(!Rules::CanRespawn(false, false, 2.9f), "respawn delay enforced");
     check(Rules::CanRespawn(false, false, 3), "respawn unlocks at delay");
+    check(!Rules::CanRespawn(false,false,7.99f,true),"flag respawn stays locked for eight seconds");
+    check(Rules::CanRespawn(false,false,8.0f,true),"flag respawn unlocks at eight seconds");
+    check(!Rules::CanRespawn(true,false,20,true),"flag delay never overrides elimination");
     check(!Rules::TeamsValid({1}, true), "solo online match rejected");
     check(!Rules::TeamsValid({1,1}, true), "empty opposing team rejected");
     check(!Rules::TeamsValid({1,1,1,2}, true), "unbalanced teams rejected");

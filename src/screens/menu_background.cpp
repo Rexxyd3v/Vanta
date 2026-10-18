@@ -1,4 +1,5 @@
 #include "../map_loader/map_effects.h"
+#include "../ui/explosion_effect.h"
 #include "menu_background.h"
 #include "../constants.h"
 #include "../utils/texture_manager.h"
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <functional>
 #include <climits>
+#include <cstring>
 
 static inline float fclamp(float val, float lo, float hi) {
     return val < lo ? lo : (val > hi ? hi : val);
@@ -380,8 +382,8 @@ void MenuBackground::DrawOrdnance() const {
                       grenade.start.y+(center.y-grenade.start.y)*t-std::sin(t*PI)*95};
             DrawEllipse((int)(grenade.start.x+(center.x-grenade.start.x)*t),
                         (int)(grenade.start.y+(center.y-grenade.start.y)*t),10,4,Fade(BLACK,.25f));
-            DrawCircleV(p,7,{44,73,38,255});
-            DrawCircleLines((int)p.x,(int)p.y,7,{174,221,82,255});
+            DrawCircleV(p,7,grenade.kind==0?Color{55,60,68,255}:Color{44,73,38,255});
+            DrawCircleLines((int)p.x,(int)p.y,7,grenade.kind==0?Color{194,202,214,255}:Color{174,221,82,255});
             DrawCircleV({p.x+3,p.y-7},2,{255,218,115,255});
             continue;
         }
@@ -405,30 +407,9 @@ void MenuBackground::DrawOrdnance() const {
                 DrawCircleV(mote,1.7f,Fade({169,218,87,255},envelope*.45f));
             }
         } else {
-            float fade=std::max(0.0f,1-age/2.1f);
-            DrawCircleGradient(center,115,Fade({35,23,17,255},fade*.65f),Fade(BLACK,0));
-            for(int i=0;i<9;++i) {
-                float angle=i*.698f;
-                Vector2 start{center.x+std::cos(angle)*18,center.y+std::sin(angle)*12};
-                Vector2 bend{center.x+std::cos(angle+.12f)*55,center.y+std::sin(angle+.12f)*38};
-                Vector2 end{center.x+std::cos(angle-.08f)*(90+i%3*16),center.y+std::sin(angle-.08f)*(62+i%3*10)};
-                DrawLineEx(start,bend,2,Fade({255,123,35,255},fade*.55f));
-                DrawLineEx(bend,end,1.5f,Fade({54,29,17,255},fade));
-            }
-            if(age<.75f) {
-                float burst=1-age/.75f;
-                DrawCircleGradient(center,80+age*180,
-                                   Fade({255,156,39,255},burst*.8f),Fade({255,64,15,255},0));
-                DrawRing(center,30+age*250,34+age*250,0,360,64,Fade({255,197,110,255},burst*.65f));
-                for(int i=0;i<20;++i) {
-                    float angle=i*2.399963f,speed=150+(i%5)*42;
-                    Vector2 p{center.x+std::cos(angle)*age*speed,center.y+std::sin(angle)*age*speed*.72f-age*55};
-                    Vector2 tail{p.x-std::cos(angle)*burst*20,p.y-std::sin(angle)*burst*14};
-                    DrawLineEx(tail,p,2+burst,Fade({255,201,108,255},burst));
-                }
-                if(age<.15f) DrawCircleGradient(center,70,
-                    Fade({255,246,207,255},1-age/.15f),Fade({255,180,55,255},0));
-            }
+            ExplosionFx::Scorch(center,age,2.1f);
+            ExplosionFx::Draw(center,age);
+
         }
     }
 }
@@ -521,7 +502,11 @@ void MenuBackground::DrawScene() {
                                camera.target.y - camera.offset.y/camera.zoom-70,
                                viewW,
                                viewH };
-        DrawMapWithMaterials(currentMapData->tmxMap,&camera,&viewport);
+        for(uint32_t i=0;i<currentMapData->tmxMap->layersLength;++i) {
+            const auto& layer=currentMapData->tmxMap->layers[i];
+            if(layer.classString && !std::strcmp(layer.classString,"decor")) continue;
+            DrawMapLayerWithMaterial(currentMapData->tmxMap,&camera,&viewport,&layer);
+        }
         DrawMapEffects(currentMapData->tmxMap,worldTime,viewport);
     } else if (bgTex.id != 0 && bgTex.width > 0) {
         int cols = (int)(WORLD_WIDTH  / bgTex.width)  + 2;
@@ -546,6 +531,23 @@ void MenuBackground::DrawScene() {
         it.depthY = b->GetDepthY();
         it.draw = [b]() { b->Draw(); };
         items.push_back(it);
+    }
+    if(currentMapData && currentMapData->tmxMap) {
+        auto* map=currentMapData->tmxMap;
+        Rectangle view{camera.target.x-camera.offset.x/camera.zoom-100,camera.target.y-camera.offset.y/camera.zoom-100,
+                       VIRTUAL_WIDTH/camera.zoom+200,VIRTUAL_HEIGHT/camera.zoom+200};
+        for(uint32_t i=0;i<map->layersLength;++i) {
+            const auto& layer=map->layers[i];
+            if(!layer.visible || layer.type!=LAYER_TYPE_OBJECT_GROUP || !layer.classString || std::strcmp(layer.classString,"decor")) continue;
+            const auto& group=layer.exact.objectGroup;
+            for(uint32_t j=0;j<group.objectsLength;++j) {
+                if(group.objects[j].type!=OBJECT_TYPE_TILE) continue;
+                TmxLayer item=layer;item.exact.objectGroup.objects=&group.objects[j];
+                item.exact.objectGroup.objectsLength=1;item.exact.objectGroup.ySortedObjects=nullptr;
+                item.exact.objectGroup.drawOrder=OBJECT_GROUP_DRAW_ORDER_INDEX;
+                items.push_back({MapObjectGroundDepth(group.objects[j]),[this,map,item,view](){DrawTMXLayers(map,&camera,&view,&item,1,0,0,WHITE);}});
+            }
+        }
     }
     std::sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) {
         return a.depthY < b.depthY;

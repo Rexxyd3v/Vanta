@@ -111,11 +111,15 @@ bool ProximityVoiceChat::initialize() {
 void ProximityVoiceChat::shutdown() {
     if (!m_initialized.exchange(false)) return;
 
+    m_transmitting.store(false);
     ma_device_stop(&m_captureDevice);
     ma_device_stop(&m_playbackDevice);
     ma_device_uninit(&m_captureDevice);
     ma_device_uninit(&m_playbackDevice);
 
+    { std::lock_guard<std::mutex> lock(m_captureMtx);m_captureBuf.clear(); }
+    { std::lock_guard<std::mutex> lock(m_outgoingMtx);while(!m_outgoing.empty()) m_outgoing.pop(); }
+    m_localSpeakUntilMs.store(0);
     if (m_encoder) {
         opus_encoder_destroy(m_encoder);
         m_encoder = nullptr;
@@ -135,7 +139,14 @@ void ProximityVoiceChat::shutdown() {
 // setTransmitEnabled  (push-to-talk)
 // ---------------------------------------------------------------------------
 void ProximityVoiceChat::setTransmitEnabled(bool enabled) {
-    m_transmitting.store(enabled);
+    enabled=enabled && m_initialized.load();
+    bool previous=m_transmitting.exchange(enabled);
+    if(previous && !enabled) {
+        std::lock_guard<std::mutex> captureLock(m_captureMtx);
+        m_captureBuf.clear();
+        std::lock_guard<std::mutex> outgoingLock(m_outgoingMtx);
+        while(!m_outgoing.empty()) m_outgoing.pop();
+    }
     if (enabled) {
         // Keep speaking indicator alive for a brief tail after release
         m_localSpeakUntilMs.store(NowMs() + 300);
@@ -176,9 +187,18 @@ int ProximityVoiceChat::getAudiblePlayerCount() const {
 // update  (called every frame — no heavy work here)
 // ---------------------------------------------------------------------------
 void ProximityVoiceChat::update(float /*deltaTime*/, class Character* /*localPlayer*/) {
-    // Encode+send happens inside captureCallback on the audio thread.
-    // Decode+mix happens inside playbackCallback on the audio thread.
-    // Nothing to do here for now.
+    // ENet is serviced exclusively on the game thread, never the audio callback.
+    std::queue<PacketVoiceData> ready;
+    { std::lock_guard<std::mutex> lock(m_outgoingMtx);ready.swap(m_outgoing); }
+    auto& network=NetworkManager::GetInstance();
+    if(!m_initialized.load() || !m_transmitting.load() || !network.IsConnected()) return;
+    while(!ready.empty()) {
+        auto& packet=ready.front();
+        packet.header.playerID=network.GetLocalPlayerID();
+        size_t bytes=sizeof(PacketHeader)+sizeof(packet.sequenceNumber)+sizeof(packet.frameSize)+packet.frameSize;
+        network.SendPacket(&packet,bytes,false);
+        ready.pop();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,16 +294,16 @@ void ProximityVoiceChat::encodeAndSend(const int16_t* pcm, int frameCount) {
 
     PacketVoiceData pkt{};
     pkt.header.type     = PacketType::VOICE_DATA;
-    pkt.header.playerID = NetworkManager::GetInstance().GetLocalPlayerID();
+    pkt.header.playerID = 0; // Assigned by the game thread when draining the queue.
     pkt.sequenceNumber  = ++m_sendSeq;
     pkt.frameSize       = static_cast<uint16_t>(encoded);
     std::memcpy(pkt.opusData, outBuf, encoded);
 
-    size_t sz = sizeof(PacketHeader)
-              + sizeof(pkt.sequenceNumber)
-              + sizeof(pkt.frameSize)
-              + encoded;
-    NetworkManager::GetInstance().SendPacket(&pkt, sz, false); // unreliable
+    std::lock_guard<std::mutex> lock(m_outgoingMtx);
+    if(!m_transmitting.load()) return;
+    // Bound latency during a stalled game frame to 200 ms of recent audio.
+    while(m_outgoing.size()>=10) m_outgoing.pop();
+    m_outgoing.push(pkt);
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +313,7 @@ void ProximityVoiceChat::captureCallback(ma_device* dev, void* /*pOut*/,
                                           const void* pIn, ma_uint32 frames)
 {
     auto* self = static_cast<ProximityVoiceChat*>(dev->pUserData);
-    if (!self || !self->m_initialized.load()) return;
+    if (!self || !self->m_initialized.load() || !pIn) return;
 
     // Only transmit when push-to-talk is held
     if (!self->m_transmitting.load()) {
@@ -304,6 +324,7 @@ void ProximityVoiceChat::captureCallback(ma_device* dev, void* /*pOut*/,
     const auto* pcmIn = static_cast<const int16_t*>(pIn);
 
     std::lock_guard<std::mutex> lk(self->m_captureMtx);
+    if(!self->m_transmitting.load()) return;
     for (ma_uint32 i = 0; i < frames; ++i) {
         self->m_captureBuf.push_back(pcmIn[i]);
     }

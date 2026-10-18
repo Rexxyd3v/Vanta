@@ -87,10 +87,10 @@ bool FirstScreen::Update(float deltaTime) {
         switch (secondState) {
             case SecondScreenState::SECOND_SCREEN_EXPANDING: {
                 if (secondTopAndLeft < 300.0f) {
-                    secondTopAndLeft += 100.0f * GetFrameTime();
+                    secondTopAndLeft += 100.0f * deltaTime;
                 }
                 if (secondBottomAndRight < 300.0f) {
-                    secondBottomAndRight += 100.0f * GetFrameTime();
+                    secondBottomAndRight += 100.0f * deltaTime;
                 }
                 if (secondTopAndLeft >= 300.0f && secondBottomAndRight >= 300.0f) {
                     secondTextVisible = true;
@@ -106,16 +106,8 @@ bool FirstScreen::Update(float deltaTime) {
                 break;
             }
             case SecondScreenState::SECOND_SCREEN_FADING_OUT: {
-                // Fade out: increase alpha from 0 to 255 over time
-                // Original: fadeOpacity += 100.0f * GetFrameTime() / 255.0f; where fadeOpacity 0-1
-                // We'll convert: secondFadeAlpha increase per second such that 255 reached in ~2.55 seconds? Let's match original.
-                // Original fadeOpacity increment per second: 100.0 / 255.0 per frame? Actually per second: 100.0/255.0 per frame * 60? Let's just replicate.
-                // We'll do: secondFadeAlpha += 100.0f * GetFrameTime(); // because original adds 100/255 per frame, and 1/255 of 255 is 1? Wait.
-                // Let's compute: original fadeOpacity (0-1) increases by (100 * dt) / 255.
-                // To convert to alpha 0-255: alpha = fadeOpacity * 255.
-                // So delta_alpha = (100 * dt / 255) * 255 = 100 * dt.
-                // Therefore, secondFadeAlpha += 100.0f * GetFrameTime();
-                secondFadeAlpha += 100.0f * GetFrameTime();
+                // Fade to black over 2.55 seconds using the screen timestep.
+                secondFadeAlpha += 100.0f * deltaTime;
                 if (secondFadeAlpha >= 255.0f) {
                     secondFadeAlpha = 255.0f;
                     secondState = SecondScreenState::SECOND_SCREEN_DONE;

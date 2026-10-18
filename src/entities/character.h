@@ -51,6 +51,7 @@ public:
         dashTimer = dashCooldown = shieldTimer = shieldCooldown = 0.0f;
         dashEchoes.clear(); dashEchoClock = shieldAge = shieldHitFlash = 0.0f;
         floorHeight = 0.0f;
+        meleeSwing=meleeCooldown=flashBlindTimer=0;meleeHitPending=false;justShot=false;
         projectiles.clear();
         RefillAmmo();
         jumpHeight = 0.0f;
@@ -58,6 +59,13 @@ public:
         SetState(CharState::IDLE);
         if (animations.count(CharState::IDLE)) animations[CharState::IDLE]->Reset();
     }
+    void SetEquipment(int melee=-1,int skin=0,int utility=-1) { reloadTimer=0;meleeVariant=std::clamp(melee,-1,1);meleeSkin=std::clamp(skin,0,3);utilityItem=std::clamp(utility,-1,2); }
+    int GetMeleeVariant() const { return meleeVariant; }
+    int GetMeleeSkin() const { return meleeSkin; }
+    int GetUtilityItem() const { return utilityItem; }
+    bool ConsumeMeleeHit() { bool hit=meleeHitPending;meleeHitPending=false;return hit; }
+    void ApplyFlash(float seconds) { flashBlindTimer=std::max(flashBlindTimer,seconds); }
+    float GetFlashBlind() const { return flashBlindTimer; }
     bool    IsDead() const { return health <= 0; }
     bool    IsMonster() const { return isMonster; }
     bool    IsAnimationFinished() const;
@@ -119,7 +127,7 @@ public:
     // Uses the actual visual bottom edge of the sprite (position.y - jumpHeight + spriteHeight/2)
     // so the sorted order matches what the player actually sees.
     virtual float GetDepthY() const {
-        return position.y-jumpHeight+feetOffset;
+        return position.y+feetOffset;
     }
 
     // ------------------------------------------------------------------
@@ -167,6 +175,7 @@ public:
     std::vector<std::shared_ptr<Projectile>>& GetProjectiles() { return projectiles; }
     void SwitchWeapon(int index);
     bool Shoot(Vector2 targetPos); // expose for remote player
+    void SpawnWeaponProjectiles(Vector2 muzzle,Vector2 direction);
     void ShootInDirection(Vector2 dir); // for remote players: uses normalized direction directly
 
     // Getters for networking
@@ -180,6 +189,9 @@ public:
     Vector2 GetLastShotDirection() const { return lastShotDirection; }
 
 protected:
+    int meleeVariant=-1,meleeSkin=0,utilityItem=-1;
+    float meleeSwing=0,meleeCooldown=0,flashBlindTimer=0;
+    bool meleeHitPending=false;
     Vector2    position;
     Vector2    velocity;
     int        faceDirection; // 1 = right, -1 = left

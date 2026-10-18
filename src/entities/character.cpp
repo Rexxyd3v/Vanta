@@ -6,6 +6,8 @@
 #include "../ui/game_settings.h"
 #include <iostream>
 #include "../ui/weapon_skin_catalog.h"
+#include "../ui/equipment_art.h"
+#include "bag_catalog.h"
 
 // Static combat audio flag — disabled during menu background simulation
 bool Character::combatAudioEnabled = true;
@@ -26,7 +28,10 @@ static void PlayWeaponSound(int index) {
         "assets/sounds/weapon3.mp3", // Weapon 2 (Shotgun)
         "assets/sounds/weapon2.mp3", // Pistol
         "assets/sounds/weapon1.mp3", // Assault rifle
-        "assets/sounds/weapon2.mp3" // Sniper
+        "assets/sounds/weapon2.mp3", // Sniper
+        "assets/sounds/weapon1.mp3", // AK
+        "assets/sounds/weapon3.mp3", // Double barrel
+        "assets/sounds/weapon1.mp3" // Machine pistol
     };
     
     if (index >= 0 && index < WeaponCount) {
@@ -163,6 +168,7 @@ float Character::GetHealth() const { return health; }
 void Character::SwitchWeapon(int index) {
     if (index >= 0 && index < (int)weaponTextures.size()) {
         currentWeaponIndex = index;
+        meleeVariant=-1;utilityItem=-1;
         shootCooldown = Weapons[index].fireRate;
         reloadTimer = 0.0f; // cancel ongoing reload
     }
@@ -288,7 +294,15 @@ void Character::DrawDebugCollision() const {
 }
 
 bool Character::Shoot(Vector2 targetPos) {
-    if (IsDead()) return false;
+    if (IsDead() || utilityItem>=0) return false;
+    if(meleeVariant>=0) {
+        if(meleeCooldown>0) return false;
+        float dx=targetPos.x-position.x,dy=targetPos.y-position.y,length=std::hypot(dx,dy);
+        if(length<1) return false;
+        lastShotDirection={dx/length,dy/length};aimTarget=targetPos;
+        meleeCooldown=Bags::MeleeCooldown(meleeVariant);meleeSwing=.28f;meleeHitPending=true;justShot=true;
+        return true;
+    }
     if (reloadTimer > 0.0f) return false; // cannot shoot while reloading
     if (ammo[currentWeaponIndex] <= 0) {
         TriggerReload(); // automatically reload if empty
@@ -311,17 +325,8 @@ bool Character::Shoot(Vector2 targetPos) {
             lastShotDirection = dir;
             aimTarget = targetPos;
 
-            float bSpeed = Weapons[currentWeaponIndex].bulletSpeed;
-            float bRange = Weapons[currentWeaponIndex].bulletRange;
-            float bDamage = Weapons[currentWeaponIndex].damage;
-
-            if (isMonster) {
-                projectiles.push_back(std::make_shared<Projectile>(projPos, dir, bSpeed, bRange, bDamage, RED, MAROON));
-            } else {
-                projectiles.push_back(std::make_shared<Projectile>(projPos, dir, bSpeed, bRange, bDamage));
-            }
+            SpawnWeaponProjectiles(projPos,dir);
             justShot = true;
-            projectiles.back()->SetWeaponSource(currentWeaponIndex,weaponSkinId);
             muzzleFlashTimer = 0.08f; // Show muzzle flash
             PlayWeaponSound(currentWeaponIndex); // play gun sound
             return true;
@@ -330,9 +335,26 @@ bool Character::Shoot(Vector2 targetPos) {
     return false;
 }
 
+void Character::SpawnWeaponProjectiles(Vector2 muzzle,Vector2 direction) {
+    const auto& stats=Weapons[currentWeaponIndex];
+    const float spread[]={-.105f,-.070f,-.035f,.035f,.070f,.105f,0};
+    int count=currentWeaponIndex==6?7:1;
+    for(int i=0;i<count;++i) {
+        float angle=count==1?0:spread[i];
+        Vector2 ray{direction.x*std::cos(angle)-direction.y*std::sin(angle),
+                    direction.x*std::sin(angle)+direction.y*std::cos(angle)};
+        projectiles.push_back(std::make_shared<Projectile>(muzzle,ray,stats.bulletSpeed,stats.bulletRange,stats.damage,
+            isMonster?RED:YELLOW,isMonster?MAROON:ORANGE));
+        projectiles.back()->SetWeaponSource(currentWeaponIndex,weaponSkinId);
+    }
+}
+
 // Used by RemotePlayer: spawn a projectile using a pre-computed direction (no cooldown check)
 void Character::ShootInDirection(Vector2 dir) {
     if (IsDead()) return;
+    if(meleeVariant>=0) {
+        meleeSwing=.28f;lastShotDirection=dir;aimTarget={position.x+dir.x*1000,position.y+dir.y*1000};return;
+    }
     float length=std::sqrt(dir.x*dir.x+dir.y*dir.y);
     if (!std::isfinite(length) || length<0.001f) return;
     dir={dir.x/length,dir.y/length};
@@ -342,12 +364,7 @@ void Character::ShootInDirection(Vector2 dir) {
     lastShotDirection=dir;
     aimTarget={pose.muzzle.x+dir.x*1000,pose.muzzle.y+dir.y*1000};
 
-    float bSpeed = Weapons[currentWeaponIndex].bulletSpeed;
-    float bRange = Weapons[currentWeaponIndex].bulletRange;
-    float bDamage = Weapons[currentWeaponIndex].damage;
-
-    projectiles.push_back(std::make_shared<Projectile>(projPos, dir, bSpeed, bRange, bDamage));
-    projectiles.back()->SetWeaponSource(currentWeaponIndex,weaponSkinId);
+    SpawnWeaponProjectiles(projPos,dir);
     muzzleFlashTimer = 0.08f; // Show muzzle flash
     PlayWeaponSound(currentWeaponIndex); // play gun sound for remote players
 }
@@ -436,7 +453,7 @@ void Character::Draw() {
     animations[currentState]->Draw({ position.x, draw_y }, faceDirection, scale, 0.0f, tint);
     // Update muzzle flash timer moved to Update()
 
-    if (!isMonster && !IsDead()) {
+    if (!isMonster && !IsDead() && meleeVariant<0 && utilityItem<0) {
         // Always try to draw a weapon. If the selected weapon skin texture failed to load,
         // fallback to the default skin so the gun is never invisible.
         Texture2D currentTex = {0};
@@ -471,7 +488,7 @@ void Character::Draw() {
             if (muzzleFlashTimer > 0.0f) {
                 Vector2 start=pose.muzzle, dir=pose.direction, normal{-dir.y,dir.x};
                 float pulse=std::clamp(muzzleFlashTimer/0.08f,0.0f,1.0f);
-                float length=(currentWeaponIndex==1?42.0f:currentWeaponIndex==2?25.0f:32.0f)*(0.65f+0.35f*pulse);
+                float length=((currentWeaponIndex==1 || currentWeaponIndex==6)?42.0f:currentWeaponIndex==2?25.0f:32.0f)*(0.65f+0.35f*pulse);
                 auto point=[&](float along,float across) { return Vector2{start.x+dir.x*along+normal.x*across,start.y+dir.y*along+normal.y*across}; };
                 if (Settings::Get().effects) DrawCircleGradient(point(5,0),18,Fade(ORANGE,0.35f*alpha*pulse),Fade(ORANGE,0));
                 // Flame starts at the barrel opening and points along the exact shot axis.
@@ -484,6 +501,8 @@ void Character::Draw() {
         }
     }
 
+    if(!isMonster && !IsDead() && (meleeVariant>=0 || utilityItem>=0))
+        DrawHeldEquipment(GetHandPosition(),aimTarget,faceDirection,meleeVariant,meleeSkin,utilityItem,meleeSwing/.28f);
     drawShieldOrbit(true);
 
     for (auto& proj : projectiles) {
@@ -613,6 +632,8 @@ bool Character::ActivateShield() {
 }
 
 void Character::UpdateSkills(float deltaTime, bool moveDash) {
+    meleeSwing=std::max(0.0f,meleeSwing-deltaTime);meleeCooldown=std::max(0.0f,meleeCooldown-deltaTime);
+    flashBlindTimer=std::max(0.0f,flashBlindTimer-deltaTime);
     if (!std::isfinite(deltaTime) || deltaTime <= 0) return;
     muzzleFlashTimer = std::max(0.0f,muzzleFlashTimer-deltaTime);
     for (auto& echo : dashEchoes) echo.life -= deltaTime;

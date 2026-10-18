@@ -4,7 +4,7 @@
 #include "../ui/offline_setup.h"
 #include "../ui/match_setup_ui.h"
 #include <memory>
-#include "../ui/weapon_skin_preview.h"
+#include "../ui/loadout_storage.h"
 
 class OfflineMenuScreen : public IScreen {
 public:
@@ -16,7 +16,7 @@ public:
 private:
     friend struct OfflineMenuTestAccess;
     bool startGame=false,loadoutOpen=false;
-    std::unique_ptr<WeaponSkinPreview> loadout;
+    std::unique_ptr<LoadoutStorage> loadout;
     Font font{};
     MapPreview mapPreview;
     std::unique_ptr<MenuBackground> background;

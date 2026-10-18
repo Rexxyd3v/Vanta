@@ -9,7 +9,7 @@
 OfflineMenuScreen::OfflineMenuScreen() {
     font=LoadFontEx("assets/fonts/BruceForeverRegular-X3jd2.ttf",60,nullptr,0);
     if (!font.texture.id) font=GetFontDefault();
-    loadout=std::make_unique<WeaponSkinPreview>(NetworkManager::GetInstance().localWeaponSkin);
+    loadout=std::make_unique<LoadoutStorage>();
     auto& setup=Offline::Get(); Offline::Normalize(setup);
     auto names=MapRegistry::GetInstance().GetMapNames();
     if (std::find(names.begin(),names.end(),setup.map)==names.end() && !names.empty()) setup.map=names.front();
@@ -56,10 +56,10 @@ bool OfflineMenuScreen::Update(float dt) {
     if (Settings::BlocksInput()) return true;
     loadout->Update(dt);
     if(loadoutOpen) {
-        if(IsKeyPressed(KEY_ESCAPE) || Click({1020,96,80,32})) loadoutOpen=false;
+        if(loadout->WantsClose()) loadoutOpen=false;
         return true;
     }
-    if(IsKeyPressed(KEY_L) || Click({76,552,476,42})) { loadoutOpen=true; return true; }
+    if(IsKeyPressed(KEY_L) || Click({76,552,476,42})) { loadoutOpen=true;loadout->Open(); return true; }
     auto& s=Offline::Get(); Vector2 mouse=Ui::RemapMouseToVirtual();
     auto previousMode=s.mode;
     hoverStart=Ui::Approach(hoverStart,CheckCollisionPointRec(mouse,start)?1.0f:0.0f,8,dt);
@@ -189,15 +189,7 @@ void OfflineMenuScreen::Draw(RenderTexture2D target) {
     SetupUi::Action(font,start,"DEPLOY / ENTER",hoverStart);
     label("BACK / ESC",{back.x+hoverBack*4,back.y+8},16,hoverBack>0?gold:muted);
     label(s.mode==Offline::Mode::Deathmatch?TextFormat("Touch your flag / deliver to enemy base / %s drops flag",Settings::KeyLabel(Settings::Interact)):"Choose a mode, set your bots, then deploy.",{646,654},10,muted);
-    DrawTextEx(font,"LOADOUT / GUN SKINS / L",{84,566},14,1,gold);
-    if(loadoutOpen) {
-        DrawRectangle(0,0,VIRTUAL_WIDTH,VIRTUAL_HEIGHT,Fade(BLACK,0.86f));
-        DrawRectangleRec({180,80,940,510},{10,18,27,255});
-        label("YOUR ARSENAL",{220,102},24,gold); label("CLOSE / ESC",{1020,104},10,muted);
-        loadout->DrawPreview({220,142,860,248},NetworkManager::GetInstance().localWeaponSkin,font);
-        int slot=loadout->GetSelectedWeaponSlot(),skin=loadout->GetWeaponSkin(slot);
-        loadout->DrawSelector({220,418,860,118},font,skin,Ui::RemapMouseToVirtual());
-        label("Choose a weapon with the arrows. Every gun includes Default.",{220,560},11,muted);
-    }
+    DrawTextEx(font,"BAGS / STORAGE / L",{84,566},14,1,gold);
+    if(loadoutOpen) loadout->Draw(font);
     EndTextureMode();
 }

@@ -39,7 +39,7 @@ public:
 
     GameMode GetMode() const { return currentMode; }
     bool ThrowGrenade(int kind);
-    float GetGrenadeCooldown(int kind) const { return kind >= 0 && kind < 2 ? grenadeCooldown[kind] : 0; }
+    float GetGrenadeCooldown(int kind) const { return kind >= 0 && kind < 3 ? grenadeCooldown[kind] : 0; }
 
     // Used by voice/proximity system in main.cpp
     Character* GetLocalPlayer() const { return player; }
@@ -119,13 +119,23 @@ private:
     void DrawHud();
     struct GrenadeEffect { Vector2 start, target; float age; int kind; bool local; uint32_t ownerID = 0; int ownerTeam = 0; };
     std::vector<GrenadeEffect> grenades;
-    float grenadeCooldown[2] = {0, 0};
+    float grenadeCooldown[3] = {0, 0, 0};
     float explosionShake = 0, poisonExposure = 0;
     void UpdateGrenades(float dt, bool allowInput);
     void DrawGrenades();
     void DrawGrenadeScars();
     void ApplyPoisonDamage(const GrenadeEffect& effect, Character* victim);
-    void ResetGrenades() { grenades.clear(); grenadeCooldown[0] = grenadeCooldown[1] = 0; explosionShake = poisonExposure = 0; }
+    void ResetGrenades() { grenades.clear(); grenadeCooldown[0] = grenadeCooldown[1] = grenadeCooldown[2] = 0; explosionShake = poisonExposure = 0; }
+    int activeBag=0;
+    bool bagMenuOpen=false,bagInputConsumed=false;
+    Vector2 bagSpawnPosition{};
+    float bagMessageTimer=0;
+    bool CanChangeBag() const;
+    bool SelectBag(int index);
+    void ApplyActiveBag(bool respawn=false);
+    void UpdateBagControls(float dt);
+    void UpdateEquipmentCombat();
+    void DrawBagHud();
     void RespawnLocal();
     // Map data
     MapData* currentMapData;

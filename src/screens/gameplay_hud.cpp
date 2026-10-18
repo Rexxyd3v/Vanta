@@ -6,6 +6,8 @@
 #include "../rules/match_rules.h"
 #include "../rules/flag_rules.h"
 #include "../ui/weapon_skin_catalog.h"
+#include "../ui/equipment_art.h"
+#include "../entities/bag_catalog.h"
 #include <algorithm>
 #include <cmath>
 
@@ -149,11 +151,7 @@ void GameplayScreen::DrawHud() {
             DrawLineStrip(points,7,tint);
             DrawLineEx({center.x,center.y-7},{center.x,center.y+6},2,tint);
         } else {
-            DrawCircleLines(x,596,9,tint);
-            DrawLineEx({center.x-5,center.y-13},{center.x+4,center.y-13},3,tint);
-            DrawLineEx({center.x+4,center.y-13},{center.x+8,center.y-6},2,tint);
-            if (icon==3) { DrawCircleLines(x+10,580,4,tint); DrawCircleLines(x+5,573,3,Fade(tint,0.6f)); }
-            else { DrawLineEx({center.x-4,center.y-4},{center.x+4,center.y+4},2,tint); }
+            DrawEquipmentArt(false,icon-2,0,{center.x-13,center.y-18,26,36});
         }
         centered(label,x,635,12,active ? color : muted);
         if (active) centered("ACTIVE",x,652,10,color);
@@ -161,24 +159,30 @@ void GameplayScreen::DrawHud() {
     };
     skill(506,"DASH",Settings::Dash,player->GetDashCooldown(),2,player->GetDashTimer()>0,cyan,0);
     skill(602,"SHIELD",Settings::Shield,player->GetShieldCooldown(),6,player->GetShieldTimer()>0,{155,177,255,255},1);
-    skill(698,"GRENADE",Settings::Grenade,grenadeCooldown[0],8,false,green,2);
-    skill(794,"SMOKE",Settings::Smoke,grenadeCooldown[1],12,false,green,3);
+    if(player->GetBag().grenade) skill(698,"GRENADE",Settings::Grenade,grenadeCooldown[0],8,false,white,2);
+    if(player->GetBag().smoke) skill(794,"SMOKE",Settings::Smoke,grenadeCooldown[1],12,false,green,3);
+    if(player->GetBag().flash) skill(890,"FLASH",Settings::Flash,grenadeCooldown[2],15,false,white,4);
 
     // Ammo uses typography and a thin progress arc, without stacked weapon boxes.
 
     int weapon=std::clamp(player->GetWeaponIndex(),0,WeaponCount-1);
-    right(WeaponName(weapon),1260,552,18,gold);
-    right(TextFormat("%02d",player->GetAmmo()),1186,579,52,player->GetAmmo()<=3 ? ORANGE : white);
-    text(TextFormat("/ %02d",player->GetMaxAmmo()),1202,605,20,muted);
-    float ammoProgress=player->IsReloading() ? player->GetReloadProgress() : (float)player->GetAmmo()/player->GetMaxAmmo();
-    DrawLineEx({1090,639},{1260,639},2,Fade(white,0.15f));
-    DrawLineEx({1090,639},{1090+170*std::clamp(ammoProgress,0.0f,1.0f),639},2,player->IsReloading() ? cyan : gold);
-    right(player->IsReloading() ? TextFormat("RELOADING %02d%%",(int)(100*player->GetReloadProgress())) :
-        TextFormat("[%s] RELOAD",Settings::KeyLabel(Settings::Reload)),1260,650,10,player->IsReloading() ? cyan : muted);
-    for (int i=0;i<WeaponCount;++i) {
-        int x=902+i*72;
-        text(TextFormat("%d %s",i+1,WeaponShortName(i)),x,521,9,i==weapon ? gold : Fade(muted,0.65f));
-        if (i==weapon) DrawLineEx({(float)x,539},{(float)x+20,539},2,gold);
+    if(player->GetMeleeVariant()>=0) {
+        right(Bags::MeleeName(player->GetMeleeVariant()),1260,552,18,gold);
+        DrawEquipmentArt(true,player->GetMeleeVariant(),player->GetMeleeSkin(),{1090,578,170,58});
+        right("LMB / MELEE ATTACK",1260,650,10,muted);
+    } else if(player->GetUtilityItem()>=0) {
+        int kind=player->GetUtilityItem();
+        right(Bags::UtilityName(kind),1260,552,18,gold);
+        DrawEquipmentArt(false,kind,0,{1175,579,65,57});
+        right(grenadeCooldown[kind]>0?TextFormat("READY IN %.0f",std::ceil(grenadeCooldown[kind])):"LMB / THROW",1260,650,10,muted);
+    } else {
+        right(WeaponName(weapon),1260,552,18,gold);
+        right(TextFormat("%02d",player->GetAmmo()),1186,579,52,player->GetAmmo()<=3 ? ORANGE : white);
+        text(TextFormat("/ %02d",player->GetMaxAmmo()),1202,605,20,muted);
+        float ammoProgress=player->IsReloading()?player->GetReloadProgress():(float)player->GetAmmo()/player->GetMaxAmmo();
+        DrawLineEx({1090,639},{1260,639},2,Fade(white,.15f));
+        DrawLineEx({1090,639},{1090+170*std::clamp(ammoProgress,0.0f,1.0f),639},2,player->IsReloading()?cyan:gold);
+        right(player->IsReloading()?TextFormat("RELOADING %02d%%",(int)(100*player->GetReloadProgress())):TextFormat("[%s] RELOAD",Settings::KeyLabel(Settings::Reload)),1260,650,10,player->IsReloading()?cyan:muted);
     }
     centered("ESC  MENU     F10  SETTINGS     TAB  SCORES",650,672,8,Fade(muted,0.7f));
 
@@ -198,8 +202,8 @@ void GameplayScreen::DrawHud() {
         DrawRectangleGradientV(0,338,VIRTUAL_WIDTH,80,Fade(ink,0.55f),Fade(ink,0));
         centered("ELIMINATED",650,300,36,gold);
         bool automatic=!practice || offlineSetup.mode!=Offline::Mode::Training;
-        const char* hint=elimination ? "Waiting for the next round" : automatic ? TextFormat("Respawning at your base in %.0f",std::ceil(std::max(0.0f,Rules::RespawnDelay-deadFor))) : deadFor<Rules::RespawnDelay ?
-            TextFormat("Respawn available in %.0f",std::ceil(Rules::RespawnDelay-deadFor)) : "Press ENTER to respawn";
+        const char* hint=elimination ? "Waiting for the next round" : automatic ? TextFormat("Respawning at your base in %.0f",std::ceil(std::max(0.0f,Rules::RespawnSeconds(IsFlagDeathmatch())-deadFor))) : deadFor<Rules::RespawnSeconds(IsFlagDeathmatch()) ?
+            TextFormat("Respawn available in %.0f",std::ceil(Rules::RespawnSeconds(IsFlagDeathmatch())-deadFor)) : "Press ENTER to respawn";
         centered(hint,650,352,18,white);
     }
     if (damageFlash>0 && Settings::Get().effects) {
@@ -242,6 +246,8 @@ void GameplayScreen::DrawKillFeed() {
                     DrawWeaponSkinTexture(texture,source,destination,{destination.width/2,destination.height/2},0,entry.weapon,entry.skin,opacity);
                 }
             }
+        } else if(entry.weapon==Bags::MeleeDamageId) {
+            DrawEquipmentArt(true,std::clamp(entry.skin/4,0,1),entry.skin%4,{1081.0f+shift,y-1.0f,62,23},0,opacity);
         } else {
             Color color=entry.weapon==WeaponCount+1?Color{154,248,67,255}:Color{233,192,107,255};
             Vector2 center{1112.0f+shift,y+11.0f};

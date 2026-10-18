@@ -47,6 +47,7 @@ void GameplayScreen::StartOfflineRound() {
         bot->ResetHealth(100); bot->ResetDeathTimer(); bot->SetPosition(GetTeamSpawnPoint(bot->GetTeamID()));
         ResolveWorldCollision(bot.get()); ClampCharacterToWorld(bot.get());
     }
+    ApplyActiveBag(true);
     deadFor=0;
 }
 void GameplayScreen::RecordOfflineKill(Character* killer,Character* victim,int weapon,int skin) {
@@ -94,7 +95,7 @@ void GameplayScreen::UpdatePractice(float dt) {
             else if (enemy) bot->UpdateAI(dt,enemy->GetPosition());
         }
         bot->Update(dt); ResolveWorldMovement(bot.get(),previousBotPosition); ClampCharacterToWorld(bot.get());
-        if (fighting && !Offline::RoundMode(offlineSetup.mode) && bot->ShouldRespawn()) {
+        if (fighting && !Offline::RoundMode(offlineSetup.mode) && bot->ShouldRespawn(IsFlagDeathmatch()?Rules::FlagRespawnDelay:0)) {
             bot->ResetHealth(100); bot->ResetDeathTimer();
             bot->SetPosition(bot->GetTeamID()?GetTeamSpawnPoint(bot->GetTeamID()):offlineSetup.mode==Offline::Mode::FreeForAll?GetDeathmatchSpawnPoint((uint32_t)botIndex+1):GetFarSpawnPoint());
             ResolveWorldCollision(bot.get()); ClampCharacterToWorld(bot.get());

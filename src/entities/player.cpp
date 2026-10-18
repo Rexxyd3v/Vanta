@@ -18,6 +18,19 @@ Player::Player(Vector2 startPosition, int playerIndex, const std::string& skinPa
 
 Player::~Player() {}
 
+void Player::ConfigureBag(const Bags::Loadout& bag,int packedSkins) {
+    bagEnabled=true;bagLoadout=bag;Bags::Normalize(bagLoadout);SetWeaponSkin(packedSkins);SelectEquipment(0);
+}
+void Player::SelectEquipment(int slot) {
+    if(!bagEnabled || slot<0 || slot>5) return;
+    if(slot>=3 && !Bags::UtilityEquipped(bagLoadout,slot-3)) return;
+    equipmentSlot=slot;SetEquipment();
+    if(slot==0) SwitchWeapon(bagLoadout.primary);
+    else if(slot==1) SwitchWeapon(bagLoadout.secondary);
+    else if(slot==2) SetEquipment(bagLoadout.melee,bagLoadout.meleeSkin);
+    else SetEquipment(-1,0,slot-3);
+}
+
 void Player::Update(float deltaTime) {
     for (auto it = projectiles.begin(); it != projectiles.end();) {
         (*it)->Update(deltaTime);
@@ -109,16 +122,18 @@ void Player::Update(float deltaTime) {
 
     // ---- SHOOT & WEAPONS ----
     if (playerIndex == 0) {
+        if(bagEnabled) {
+            const int keys[]={KEY_ONE,KEY_TWO,KEY_THREE,KEY_FOUR,KEY_FIVE,KEY_SIX};
+            for(int i=0;i<6;++i) if(IsKeyPressed(keys[i])) SelectEquipment(i);
+        } else {
+            const int keys[]={KEY_ONE,KEY_TWO,KEY_THREE,KEY_FOUR,KEY_FIVE,KEY_SIX,KEY_SEVEN,KEY_EIGHT};
+            for(int i=0;i<WeaponCount;++i) if(IsKeyPressed(keys[i])) SwitchWeapon(i);
+        }
         if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) || IsKeyDown(KEY_Z)) Shoot(aimTarget);
-        if (Settings::Pressed(Settings::Reload)) TriggerReload();
-        if (IsKeyPressed(KEY_ONE)) SwitchWeapon(0);
-        if (IsKeyPressed(KEY_TWO)) SwitchWeapon(1);
-        if (IsKeyPressed(KEY_THREE)) SwitchWeapon(2);
-        if (IsKeyPressed(KEY_FOUR)) SwitchWeapon(3);
-        if (IsKeyPressed(KEY_FIVE)) SwitchWeapon(4);
+        if (Settings::Pressed(Settings::Reload) && GetMeleeVariant()<0 && GetUtilityItem()<0) TriggerReload();
     } else {
         if (IsKeyDown(KEY_M) || IsKeyDown(KEY_KP_0)) Shoot(aimTarget);
-        if (Settings::Pressed(Settings::Reload)) TriggerReload();
+        if (Settings::Pressed(Settings::Reload) && GetMeleeVariant()<0 && GetUtilityItem()<0) TriggerReload();
         if (IsKeyPressed(KEY_SEVEN)) SwitchWeapon(0);
         if (IsKeyPressed(KEY_EIGHT)) SwitchWeapon(1);
         if (IsKeyPressed(KEY_NINE)) SwitchWeapon(2);

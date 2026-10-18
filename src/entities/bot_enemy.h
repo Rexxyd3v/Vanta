@@ -14,9 +14,10 @@ public:
     // Provide a reference to the target to chase/shoot at
     void UpdateAI(float deltaTime, Vector2 targetPosition);
 
+    bool Shoot(Vector2 target) { return GetFlashBlind()>0?false:Character::Shoot(target); }
     void SetDifficulty(int level);
     void MoveToObjective(float dt, Vector2 target);
-    bool ShouldRespawn() const;
+    bool ShouldRespawn(float minimumDelay=0) const;
     void ResetDeathTimer();
 
     // Alpha for drawing (used for fade-in effect in demo mode)

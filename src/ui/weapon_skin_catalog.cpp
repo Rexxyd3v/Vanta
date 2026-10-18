@@ -5,7 +5,7 @@
 
 namespace {
 
-const char* Folders[]={"SMG","Shotgun","Pistol","AssaultRifle","Sniper"};
+const char* Folders[]={"SMG","Shotgun","Pistol","AssaultRifle","Sniper","AKRifle","DoubleBarrel","MachinePistol"};
 std::string DefaultFile(int slot) {
     return std::string("assets/Weapons/")+Folders[slot]+"/default.png";
 }
@@ -16,7 +16,10 @@ Palette Colors(int slot,int skin) {
         {{{156,89,44,255},{222,168,94,255}},{{214,166,64,255},{255,228,137,255}},{{57,68,81,255},{130,149,167,255}}},
         {{{179,199,215,255},{68,87,110,255}},{{53,218,231,255},{184,75,224,255}},{{55,64,77,255},{138,155,174,255}}},
         {{{67,111,69,255},{166,177,99,255}},{{192,48,57,255},{52,224,229,255}},{{169,211,229,255},{59,90,119,255}}},
-        {{{183,148,94,255},{98,84,61,255}},{{44,65,80,255},{100,206,190,255}},{{99,79,191,255},{71,225,201,255}}}
+        {{{183,148,94,255},{98,84,61,255}},{{44,65,80,255},{100,206,190,255}},{{99,79,191,255},{71,225,201,255}}},
+        {{{79,91,107,255},{188,197,211,255}},{{164,47,29,255},{255,167,51,255}},{{169,218,233,255},{66,111,144,255}}},
+        {{{130,74,39,255},{217,166,98,255}},{{72,79,91,255},{166,72,41,255}},{{216,174,66,255},{249,230,154,255}}},
+        {{{51,189,225,255},{185,62,226,255}},{{167,42,63,255},{52,59,74,255}},{{207,226,238,255},{61,109,147,255}}}
     };
     return colors[std::clamp(slot,0,WeaponCount-1)][std::clamp(skin-1,0,2)];
 }
@@ -33,7 +36,10 @@ const char* WeaponSkinLabel(int slot,int skin) {
         {"DEFAULT","CLASSIC WOOD","GOLDEN OAK","CARBON FIBER"},
         {"DEFAULT","SILVER ALLOY","NEON CYBER","CARBON FIBER"},
         {"DEFAULT","JUNGLE CAMO","CRIMSON CIRCUIT","ARCTIC STEEL"},
-        {"DEFAULT","DESERT CAMO","NIGHT OPS","AURORA"}
+        {"DEFAULT","DESERT CAMO","NIGHT OPS","AURORA"},
+        {"DEFAULT","URBAN CAMO","EMBER","FROSTBITE"},
+        {"DEFAULT","WALNUT","RUST IRON","GOLD RUSH"},
+        {"DEFAULT","NEON VOLT","CRIMSON","ICE TECH"}
     };
     return labels[std::clamp(slot,0,WeaponCount-1)][std::clamp(skin,0,WeaponSkinCount-1)];
 }
@@ -64,7 +70,7 @@ void main() {
     vec2 cell=floor(uv*vec2(14.0,7.0));
     float noise=fract(sin(dot(cell,vec2(12.9898,78.233)))*43758.5453);
     float pattern=style==1?step(0.58,noise):style==2?step(0.84,fract(uv.x*8.0+uv.y*2.5)):step(0.5,mod(cell.x+cell.y,2.0))*0.48;
-    if(weaponSlot==1 && style==1) pattern=0.35+0.25*sin(uv.y*100.0+sin(uv.x*18.0)*1.6);
+    if((weaponSlot==1 || weaponSlot==6) && style==1) pattern=0.35+0.25*sin(uv.y*100.0+sin(uv.x*18.0)*1.6);
     if(weaponSlot==2 && style==1) pattern=step(0.94,fract(uv.y*40.0))*0.35;
     vec3 material=mix(paint,accent,pattern)*(0.50+shade*0.50);
     if(weaponSlot==0 && style==2) {

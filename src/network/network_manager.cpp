@@ -572,16 +572,22 @@ void NetworkManager::Update() {
                         if (netEvent.data.size() < sizeof(PacketPlayerDamage)) { enet_packet_destroy(event.packet); break; }
                         auto* d = reinterpret_cast<PacketPlayerDamage*>(wire);
                         auto* shooter = FindPlayer(wire->playerID); auto* victim = FindPlayer(d->targetPlayerID);
-                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 90 || d->weaponIndex<0 || d->weaponIndex>WeaponCount+1 ||
+                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 90 || d->weaponIndex<0 || d->weaponIndex>WeaponCount+2 ||
                             Rules::FriendlyFire(currentGameMode != OnlineGameMode::FREE_FOR_ALL, shooter->teamID, victim->teamID)) {
                             enet_packet_destroy(event.packet); break;
                         }
+                    }
+                    if(wire->type==PacketType::PLAYER_SHOOT) {
+                        if(netEvent.data.size()!=sizeof(PacketPlayerShoot)) { enet_packet_destroy(event.packet);break; }
+                        const auto* shot=reinterpret_cast<const PacketPlayerShoot*>(wire);
+                        if(shot->weapon<0 || shot->weapon>=WeaponCount || shot->melee<-1 || shot->melee>1 || shot->meleeSkin<0 || shot->meleeSkin>3 ||
+                           !std::isfinite(shot->aimDir.x) || !std::isfinite(shot->aimDir.y)) { enet_packet_destroy(event.packet);break; }
                     }
                     if (wire->type == PacketType::PLAYER_GRENADE) {
                         if (!matchActive || netEvent.data.size() != sizeof(PacketPlayerGrenade)) { enet_packet_destroy(event.packet); break; }
                         auto* g = reinterpret_cast<PacketPlayerGrenade*>(wire);
                         float dx = g->target.x-g->start.x, dy = g->target.y-g->start.y;
-                        if (g->kind > 1 || !std::isfinite(g->start.x) || !std::isfinite(g->start.y) ||
+                        if (g->kind > 2 || !std::isfinite(g->start.x) || !std::isfinite(g->start.y) ||
                             !std::isfinite(g->target.x) || !std::isfinite(g->target.y) || dx*dx+dy*dy > 651*651) {
                             enet_packet_destroy(event.packet); break;
                         }
@@ -589,7 +595,7 @@ void NetworkManager::Update() {
                     if (wire->type == PacketType::PLAYER_KILLED) {
                         if (netEvent.data.size() < sizeof(PacketPlayerKilled)) { enet_packet_destroy(event.packet); break; }
                         auto* k = reinterpret_cast<PacketPlayerKilled*>(wire);
-                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID) || k->weaponIndex<0 || k->weaponIndex>WeaponCount+1) { enet_packet_destroy(event.packet); break; }
+                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID) || k->weaponIndex<0 || k->weaponIndex>WeaponCount+2) { enet_packet_destroy(event.packet); break; }
                     }
                     if (wire->type == PacketType::PLAYER_RESPAWN && matchActive && currentGameMode == OnlineGameMode::ELIMINATION) {
                         enet_packet_destroy(event.packet); break;

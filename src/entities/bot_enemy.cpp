@@ -36,6 +36,7 @@ void BotEnemy::SetDifficulty(int level) {
     speed=speeds[difficulty]; shootCooldown=cooldowns[difficulty];
 }
 void BotEnemy::MoveToObjective(float dt,Vector2 target) {
+    if(GetFlashBlind()>0) { SetState(CharState::IDLE);return; }
     if (IsDead()) return;
     Vector2 delta{target.x-position.x,target.y-position.y};
     float distance=std::sqrt(delta.x*delta.x+delta.y*delta.y);
@@ -103,6 +104,7 @@ void BotEnemy::Update(float deltaTime) {
 }
 
 void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
+    if(GetFlashBlind()>0) { SetState(CharState::IDLE);return; }
     if (IsDead()) return;
 
     // Distance to target
@@ -330,8 +332,8 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
     }
 }
 
-bool BotEnemy::ShouldRespawn() const {
-    return IsDead() && deathTimer >= respawnDelay;
+bool BotEnemy::ShouldRespawn(float minimumDelay) const {
+    return IsDead() && deathTimer >= std::max(respawnDelay,minimumDelay);
 }
 
 void BotEnemy::ResetDeathTimer() {

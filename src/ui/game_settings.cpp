@@ -20,6 +20,7 @@ void Open() { opened = true; binding = -1; status.clear(); }
 static bool ValidKey(int k) { return (k >= KEY_APOSTROPHE && k <= KEY_GRAVE) || (k >= KEY_SPACE && k <= KEY_SPACE) || (k >= KEY_INSERT && k <= KEY_END) || (k >= KEY_CAPS_LOCK && k <= KEY_PAUSE) || (k >= KEY_KP_0 && k <= KEY_KP_EQUAL) || (k >= KEY_LEFT_SHIFT && k <= KEY_KB_MENU); }
 void Load() {
     std::ifstream in("vanta-settings.cfg");
+    bool savedBags=false;
     std::string key; float value;
     while (in >> key >> value) {
         if (!std::isfinite(value)) continue;
@@ -30,11 +31,29 @@ void Load() {
         else if (key == "effects") prefs.effects = value != 0;
         else if (key == "fps") prefs.showFps = value != 0;
         else if (key == "difficulty") prefs.difficulty = (int)std::clamp(value, 0.0f, 2.0f);
+        else if(key=="activeBag") prefs.activeBag=(int)std::clamp(value,0.0f,2.0f);
+        else if(key.rfind("bag",0)==0) {
+            savedBags=true;
+            for(int i=0;i<Bags::Count;++i) {
+                std::string prefix="bag"+std::to_string(i);auto& bag=prefs.bags[i];
+                if(key==prefix+"Primary") bag.primary=(int)std::clamp(value,-1.0f,100.0f);
+                if(key==prefix+"Secondary") bag.secondary=(int)std::clamp(value,-1.0f,100.0f);
+                if(key==prefix+"PrimarySkin") bag.primarySkin=(int)std::clamp(value,0.0f,3.0f);
+                if(key==prefix+"SecondarySkin") bag.secondarySkin=(int)std::clamp(value,0.0f,3.0f);
+                if(key==prefix+"Melee") bag.melee=(int)std::clamp(value,0.0f,1.0f);
+                if(key==prefix+"MeleeSkin") bag.meleeSkin=(int)std::clamp(value,0.0f,3.0f);
+                if(key==prefix+"Grenade") bag.grenade=value!=0;
+                if(key==prefix+"Smoke") bag.smoke=value!=0;
+                if(key==prefix+"Flash") bag.flash=value!=0;
+                Bags::Normalize(bag);
+            }
+        }
         else if(key.rfind("weaponSkin",0)==0) {
             for(int i=0;i<WeaponCount;++i) if(key=="weaponSkin"+std::to_string(i)) prefs.weaponSkins[i]=(int)std::clamp(value,0.0f,(float)(WeaponSkinCount-1));
         }
         else for (int i = 0; i < ActionCount; ++i) if (key == "key" + std::to_string(i) && value >= 0 && value <= 512 && ValidKey((int)value)) prefs.keys[i] = (int)value;
     }
+    if(!savedBags) for(auto& bag:prefs.bags) { bag.primarySkin=prefs.weaponSkins[bag.primary];bag.secondarySkin=prefs.weaponSkins[bag.secondary]; }
 }
 bool Save() {
     std::ofstream out("vanta-settings.cfg");
@@ -42,6 +61,14 @@ bool Save() {
         << "\neffects " << prefs.effects << "\nfps " << prefs.showFps << "\ndifficulty " << prefs.difficulty << '\n';
     for (int i = 0; i < ActionCount; ++i) out << "key" << i << ' ' << prefs.keys[i] << '\n';
     for(int i=0;i<WeaponCount;++i) out << "weaponSkin" << i << ' ' << prefs.weaponSkins[i] << '\n';
+    out << "activeBag " << prefs.activeBag << '\n';
+    for(int i=0;i<Bags::Count;++i) {
+        const auto& b=prefs.bags[i];std::string p="bag"+std::to_string(i);
+        out<<p<<"Primary "<<b.primary<<'\n'<<p<<"Secondary "<<b.secondary<<'\n'
+           <<p<<"PrimarySkin "<<b.primarySkin<<'\n'<<p<<"SecondarySkin "<<b.secondarySkin<<'\n'
+           <<p<<"Melee "<<b.melee<<'\n'<<p<<"MeleeSkin "<<b.meleeSkin<<'\n'
+           <<p<<"Grenade "<<b.grenade<<'\n'<<p<<"Smoke "<<b.smoke<<'\n'<<p<<"Flash "<<b.flash<<'\n';
+    }
     out.flush(); return out.good();
 }
 bool DownKey(Action a) { return !BlocksInput() && IsKeyDown(prefs.keys[a]); }
@@ -107,7 +134,7 @@ void Draw() {
     DrawText(prefs.showFps ? "FPS COUNTER      ON" : "FPS COUNTER      OFF", 350, 489, 16, RAYWHITE);
     const char* difficulty[] = {"EASY", "MEDIUM", "DIFFICULT"};
     DrawText(TextFormat("PRACTICE: %s", difficulty[prefs.difficulty]), 350, 534, 16, RAYWHITE);
-    const char* actions[] = {"Move up", "Move down", "Move left", "Move right", "Jump", "Dash", "Shield", "Reload", "Push to talk", "Grenade", "Smoke grenade", "Drop flag"};
+    const char* actions[] = {"Move up", "Move down", "Move left", "Move right", "Jump", "Dash", "Shield", "Reload", "Push to talk", "Grenade", "Smoke grenade", "Drop flag", "Flashbang"};
     for (int i = 0; i < ActionCount; ++i) {
         int y = 161 + i * 30;
         DrawRectangle(680, y, 270, 27, binding == i ? Color{70, 55, 25, 255} : Color{24, 33, 47, 255});

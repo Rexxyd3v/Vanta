@@ -33,3 +33,11 @@ Use case: stylized-concept. Asset type: a single transparent game weapon sprite 
 ### Sniper rifle
 
 Use case: stylized-concept. Asset type: a single transparent game weapon sprite for the existing VANTA 2D cartoon shooter. Reference image is STYLE reference only: simple flat white/light gray body with medium gray shadow shapes and black grip cutouts, clean flat vector-like cartoon art. Create ONE default SNIPER RIFLE: long slim barrel facing RIGHT, simple large readable scope centered above receiver, angular stock on left, pistol grip and small magazine below, heavy muzzle at far right. Strict perfect side view, zero perspective or tilt. Long horizontal silhouette centered on canvas with generous transparent margin. Use large simple readable shapes, 3 flat grayscale tones, NO gradients, realism, fine texture, glow, hands, character, background, text, logo, shadow outside weapon, or other objects. Stylized proportions consistent with the reference cartoon weapon. Actual transparent alpha background. Muzzle must be the rightmost visible edge.
+
+## Added AK, double barrel and machine pistol
+
+AKRifle/default.png, DoubleBarrel/default.png and MachinePistol/default.png were generated with imagegen using AssaultRifle/default.png as a style reference. Each has transparent alpha and an unpainted grayscale default. Three independent runtime skin materials per gun reuse the existing shader, loadout, save and network skin format.
+
+Slots 6/7/8 select the AK rifle (30 rounds, 30 damage), double barrel (2 shells, seven 11-damage pellets per shell), and machine pistol (24 rounds, 9 damage). All use the existing reload, muzzle alignment, tracer and kill-feed systems. Double-barrel pellet spread is identical for local and remote shot rendering.
+
+AK skins: Urban Camo, Ember, Frostbite. Double-barrel skins: Walnut, Rust Iron, Gold Rush. Machine-pistol skins: Neon Volt, Crimson, Ice Tech.

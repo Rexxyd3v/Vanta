@@ -97,6 +97,7 @@ void MapRegistry::LoadAllMaps(const char* mapsRoot) {
                 continue;
 
             std::string folderPath = std::string(mapsRoot) + dirName + "/";
+            if (FileExists((folderPath+"retired.map").c_str())) continue;
             
             // Look for a .tmx file in this folder
             std::string tmxSearch = folderPath + "*.tmx";
@@ -159,6 +160,7 @@ void MapRegistry::LoadAllMaps(const char* mapsRoot) {
                 continue;
 
             std::string folderPath = std::string(mapsRoot) + dirName + "/";
+            if (FileExists((folderPath+"retired.map").c_str())) continue;
             
             // Look for a .tmx file
             DIR* tmxDir = opendir(folderPath.c_str());
@@ -217,7 +219,8 @@ void MapRegistry::LoadAllMaps(const char* mapsRoot) {
 }
 
 MapData* MapRegistry::GetMap(const std::string& name) {
-    auto it = maps.find(name);
+    const std::string canonical=name=="Forest"?"AbandonedFoundry":name=="Forest2"?"DesertOutpost":name;
+    auto it = maps.find(canonical);
     if (it != maps.end())
         return &it->second;
     return nullptr;

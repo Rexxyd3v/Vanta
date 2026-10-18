@@ -102,6 +102,8 @@ bool OnlineMenuScreen::Update(float deltaTime) {
         return true;
     }
 
+    if(storageOpen) { storage.Update(deltaTime);if(storage.WantsClose()) storageOpen=false;return true; }
+    if(IsKeyPressed(KEY_L) && activeInput==0) { storage.Open();storageOpen=true;return true; }
     if (IsKeyPressed(KEY_ESCAPE)) {
         if (activeInput != 0) {
             activeInput = 0;
@@ -131,7 +133,7 @@ bool OnlineMenuScreen::Update(float deltaTime) {
             currentLeftTab = 0;
         }
         if (hTabLoadout) {
-            currentLeftTab = 1;
+            storage.Open();storageOpen=true;return true;
         }
     }
 
@@ -401,6 +403,7 @@ void OnlineMenuScreen::Draw(RenderTexture2D target) {
     Ui::DrawMenuButton(globalBackBtn, menuFont, "BACK", hoverGlobalBack, false, true);
 
     Ui::DrawStatusBanner(menuFont, connectError.c_str(), true);
+    if(storageOpen) storage.Draw(menuFont);
 
     EndTextureMode();
 }

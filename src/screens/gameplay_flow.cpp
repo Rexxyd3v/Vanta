@@ -15,10 +15,11 @@ void GameplayScreen::RespawnLocal() {
     auto& nm = NetworkManager::GetInstance();
     player->SetGodMode(false);
     player->ResetHealth(100);
-    grenadeCooldown[0] = grenadeCooldown[1] = 0;
+    grenadeCooldown[0] = grenadeCooldown[1] = grenadeCooldown[2] = 0;
     poisonExposure = 0;
     player->SetPosition(player->GetTeamID() ? GetTeamSpawnPoint(player->GetTeamID()) : currentMode==GameMode::PRACTICE && offlineSetup.mode==Offline::Mode::Training ? GetFarSpawnPoint() : GetDeathmatchSpawnPoint(nm.GetLocalPlayerID()));
     ResolveWorldCollision(player); ClampCharacterToWorld(player);
+    ApplyActiveBag(true);
     deadFor = 0;
     eliminated.erase(nm.GetLocalPlayerID());
     if (currentMode == GameMode::ONLINE) {
@@ -122,7 +123,7 @@ void GameplayScreen::AddKillFeed(const std::string& killer,const std::string& vi
     KillFeedEntry entry;
     entry.killer=killer.empty()?"Player":killer;
     entry.victim=victim.empty()?"Player":victim;
-    entry.weapon=std::clamp(weapon,0,WeaponCount+1); entry.skin=skin;
+    entry.weapon=std::clamp(weapon,0,WeaponCount+2); entry.skin=skin;
     entry.killerTeam=killerTeam; entry.victimTeam=victimTeam;
     entry.localKill=localKill; entry.localDeath=localDeath;
     killFeed.insert(killFeed.begin(),std::move(entry));

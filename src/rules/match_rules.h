@@ -5,12 +5,14 @@
 // Pure rule decisions, shared by gameplay and regression checks.
 namespace Rules {
 constexpr float RespawnDelay = 3.0f;
+constexpr float FlagRespawnDelay = 8.0f;
+inline float RespawnSeconds(bool flagMode) { return flagMode ? FlagRespawnDelay : RespawnDelay; }
 constexpr float RoundSeconds = 120.0f;
 inline bool FriendlyFire(bool teamMode, int shooter, int victim) {
     return teamMode && shooter != 0 && shooter == victim;
 }
-inline bool CanRespawn(bool elimination, bool matchOver, float deadFor) {
-    return !elimination && !matchOver && deadFor >= RespawnDelay;
+inline bool CanRespawn(bool elimination, bool matchOver, float deadFor, bool flagMode=false) {
+    return !elimination && !matchOver && deadFor >= RespawnSeconds(flagMode);
 }
 inline bool TeamsValid(const std::vector<int>& teams, bool teamMode) {
     if (teams.size() < 2) return false;

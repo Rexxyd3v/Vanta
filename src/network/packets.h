@@ -76,17 +76,19 @@ struct PacketPlayerUpdate {
     int charSkin;
     float dashTimer = 0, shieldTimer = 0;
     int weaponSkin;        // WeaponSkinId enum value
+    int melee=-1,meleeSkin=0,utility=-1;
 };
 
 struct PacketPlayerShoot {
     PacketHeader header;
     Vector2 aimDir;   // Normalized direction vector (not world position)
+    int weapon=0,skin=0,melee=-1,meleeSkin=0;
 };
 
 struct PacketPlayerGrenade {
     PacketHeader header;
     Vector2 start, target;
-    uint8_t kind; // 0 = frag, 1 = smoke
+    uint8_t kind; // 0 = frag, 1 = poison smoke, 2 = flashbang
 };
 
 struct PacketPlayerDamage {
@@ -100,7 +102,7 @@ struct PacketPlayerKilled {
     PacketHeader header;
     uint32_t killerPlayerID; // Authoritative ID of killer
     uint32_t victimPlayerID; // Authoritative ID of victim
-    int weaponIndex=0,weaponSkin=0; // 0..4 guns, 5 grenade, 6 poison.
+    int weaponIndex=0,weaponSkin=0; // 0..WeaponCount-1 guns, WeaponCount grenade, WeaponCount+1 poison.
 };
 
 struct PacketPlayerRespawn {

@@ -14,6 +14,7 @@ typedef struct tagBITMAPINFOHEADER {
 #include <mferror.h>
 #include <raylib.h>
 #include "screens/main_level.h"
+#include "screens/intro_screen.h"
 #include "network/network_manager.h"
 #include "map_loader/MapRegistry.h"
 #include "voice/proximity_voice_chat.h"
@@ -26,19 +27,23 @@ typedef struct tagBITMAPINFOHEADER {
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include <queue>
+#include <fstream>
+#include <filesystem>
 
 ProximityVoiceChat proximityVoiceChat;
 bool proximityVoiceInitialized=false;
 bool (*getLocalPlayerPosCallback)(Vector2&)=nullptr;
-constexpr int W=1280,H=672,FPS=30,FRAMES=1050;
-constexpr float PLAYBACK_SPEED=1.3f;
+constexpr int W=1920,H=1080,FPS=30,FRAMES=2400;
+constexpr float PLAYBACK_SPEED=1.12f;
 void hr(HRESULT value) { if (FAILED(value)) { std::cerr<<"Media export HRESULT 0x"<<std::hex<<value<<std::endl; throw std::runtime_error("Media export failed"); } }
 template<class T> void release(T*& p) { if(p) { p->Release(); p=nullptr; } }
 struct Mp4 {
     IMFSinkWriter* writer=nullptr; DWORD video=0,audio=0; Wave music{};
     struct Voice { int weapon; long long start; float gain; };
-    Wave shots[3]{}; std::vector<Voice> voices;
-    void shot(int weapon,int frame,float gain) { if(frame>=0) voices.push_back({weapon==3?0:weapon==4?2:weapon,(long long)frame*(44100/FPS),gain}); }
+    Wave shots[6]{}; std::vector<Voice> voices;
+    void shot(int weapon,int frame,float gain) { if(frame>=0) voices.push_back({weapon==1 || weapon==6?1:weapon==2 || weapon==4?2:0,(long long)frame*(44100/FPS),gain}); }
+    void effect(int kind,int frame,float gain) {if(frame>=0)voices.push_back({kind,(long long)frame*(44100/FPS),gain});}
     Mp4(const wchar_t* path) {
         hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED)); hr(MFStartup(MF_VERSION));
         IMFAttributes* attributes=nullptr; hr(MFCreateAttributes(&attributes,2));
@@ -47,7 +52,7 @@ struct Mp4 {
         hr(MFCreateSinkWriterFromURL(path,nullptr,attributes,&writer)); release(attributes);
         IMFMediaType *output=nullptr,*input=nullptr;
         hr(MFCreateMediaType(&output)); hr(output->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video));
-        hr(output->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_H264)); hr(output->SetUINT32(MF_MT_AVG_BITRATE,6500000));
+        hr(output->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_H264)); hr(output->SetUINT32(MF_MT_AVG_BITRATE,12000000));
         hr(output->SetUINT32(MF_MT_INTERLACE_MODE,MFVideoInterlace_Progressive));
         hr(MFSetAttributeSize(output,MF_MT_FRAME_SIZE,W,H)); hr(MFSetAttributeRatio(output,MF_MT_FRAME_RATE,FPS,1));
         hr(MFSetAttributeRatio(output,MF_MT_PIXEL_ASPECT_RATIO,1,1)); hr(writer->AddStream(output,&video)); release(output);
@@ -73,6 +78,17 @@ struct Mp4 {
             auto* pcm=static_cast<short*>(shots[i].data); unsigned int first=0;
             while(first<shots[i].frameCount && std::abs(pcm[first*2])<150 && std::abs(pcm[first*2+1])<150) ++first;
             if(first>0 && first+1<shots[i].frameCount) WaveCrop(&shots[i],first,shots[i].frameCount-1);
+        }
+        for(int k=3;k<6;++k) {
+            Wave& w=shots[k];w.frameCount=k==3?44100:17640;w.sampleRate=44100;w.sampleSize=16;w.channels=2;
+            w.data=MemAlloc(w.frameCount*4);auto* pcm=(short*)w.data;unsigned rng=417+k;
+            float low=0;
+            for(unsigned n=0;n<w.frameCount;++n) {
+                float t=n/44100.0f;rng=rng*1664525u+1013904223u;float noise=((rng>>8)/8388608.0f-1);
+                low+=.07f*(noise-low);
+                float v=k==3?(low*1.9f+std::sin(t*6.283185f*(65-25*t))*.24f)*std::exp(-t*5):k==4?noise*.14f*std::exp(-t*13)+std::sin(t*6.283185f*1900)*.045f*std::exp(-t*7):low*.4f*std::sin(t/.4f*3.14159f);
+                pcm[n*2]=pcm[n*2+1]=(short)(std::clamp(v,-1.0f,1.0f)*26000);
+            }
         }
     }
     void sample(DWORD stream,const void* bytes,DWORD size,LONGLONG time,LONGLONG duration) {
@@ -114,96 +130,6 @@ struct Mp4 {
     ~Mp4() { for(auto& shot:shots) UnloadWave(shot); UnloadWave(music); release(writer); MFShutdown(); CoUninitialize(); }
 };
 
-// Drives the local fighter through the same movement, ammo, health, and cooldown rules.
-// This is an offline AI-controlled match, with no immunity or forced captures.
-class ReviewPlayer : public Player {
-public:
-    using Player::Player;
-    void drive(float dt,Vector2 enemy,float distance,float time,bool threat) {
-        if(IsDead()) { SetState(CharState::DEATH); UpdateWithoutInput(dt); return; }
-        float dx=enemy.x-position.x,dy=enemy.y-position.y,len=std::max(1.0f,std::hypot(dx,dy));
-        Vector2 forward{dx/len,dy/len};
-        float side=std::sin(time*1.4f)>0?1.0f:-1.0f;
-        float approach=distance>500?1.0f:distance<230?-0.65f:0.1f;
-        Vector2 direction{forward.x*approach-forward.y*side*0.75f,forward.y*approach+forward.x*side*0.75f};
-        float length=std::max(1.0f,std::hypot(direction.x,direction.y)); direction.x/=length; direction.y/=length;
-        if(dashTimer<=0) { position.x+=direction.x*speed*dt; position.y+=direction.y*speed*dt; }
-        if((threat || distance>700) && dashCooldown<=0) ActivateDash(direction);
-        if(health<50 && distance<700) ActivateShield();
-        if(threat && jumpHeight<=floorHeight+1 && jumpVelocity<=0) jumpVelocity=420;
-        SetState(jumpHeight>floorHeight+1?(jumpVelocity>0?CharState::JUMP_START:CharState::FALL):CharState::WALK);
-        int weapon=distance<230?1:distance>800?2:0;
-        if(!IsReloading()) SwitchWeapon(weapon);
-        SetAimTarget(enemy); SetFaceDirection(dx>=0?1:-1);
-        if(distance<1100) Shoot(enemy);
-        if(GetAmmo()==0 || (GetAmmo()<4 && distance>650)) TriggerReload();
-        UpdateWithoutInput(dt);
-    }
-};
-struct GameplayEffectsTestAccess {
-    static ReviewPlayer* prepare(GameplayScreen& g) {
-        Vector2 position=g.player->GetPosition(); int team=g.player->GetTeamID(); delete g.player;
-        auto* actor=new ReviewPlayer(position,0,CharacterPreview::BodyPath(1),0);
-        actor->SetTeamID(team); actor->SetName("@rjltyd"); g.player=actor;
-        g.cinematicCapture=true;
-        return actor;
-    }
-    static bool frameCamera(GameplayScreen& g,float time) {
-        // Follow the closest live duel, allowing natural action to choose the shot.
-        static Character *first=nullptr,*second=nullptr;
-        static Vector2 center=g.player->GetPosition(); static float zoom=0.78f,nextCut=0;
-        std::vector<Character*> fighters{g.player}; for(auto& b:g.bots) fighters.push_back(b.get());
-        bool cut=false;
-        if(!first || !second || first->IsDead() || second->IsDead() || time>=nextCut) {
-            float best=1e9f;
-            for(size_t i=0;i<fighters.size();++i) for(size_t j=i+1;j<fighters.size();++j) {
-                if(fighters[i]->IsDead() || fighters[j]->IsDead()) continue;
-                Vector2 a=fighters[i]->GetPosition(),b=fighters[j]->GetPosition();
-                float distance=std::hypot(a.x-b.x,a.y-b.y);
-                if(distance<best) { best=distance; first=fighters[i]; second=fighters[j]; }
-            }
-            nextCut=time+2.5f; cut=true;
-        }
-        if(!first || !second || first->IsDead() || second->IsDead()) return false;
-        if(first && second) {
-            Vector2 a=first->GetPosition(),b=second->GetPosition();
-            Vector2 target{(a.x+b.x)/2,(a.y+b.y)/2+25};
-            if(std::hypot(a.x-b.x,a.y-b.y)>1000) return false;
-            float desired=std::clamp(std::min(1020.0f/(std::abs(a.x-b.x)+260),450.0f/(std::abs(a.y-b.y)+200)),0.48f,1.08f);
-            if(cut && std::hypot(target.x-center.x,target.y-center.y)>450) { center=target; zoom=desired; }
-            center.x+=(target.x-center.x)*0.13f; center.y+=(target.y-center.y)*0.13f;
-            zoom+=(desired-zoom)*0.08f;
-        }
-        g.camera.target=center; g.camera.offset={650,340}; g.camera.zoom=zoom;
-        float halfW=650/zoom,halfH=340/zoom;
-        g.camera.target.x=std::clamp(g.camera.target.x,halfW,g.worldWidth-halfW);
-        g.camera.target.y=std::clamp(g.camera.target.y,halfH,g.worldHeight-halfH);
-        if(g.explosionShake>0) { g.camera.offset.x+=std::sin(time*93)*g.explosionShake*0.45f; g.camera.offset.y+=std::cos(time*117)*g.explosionShake*0.45f; }
-        return true;
-    }
-    static void step(GameplayScreen& g,ReviewPlayer& player,float dt,float time,Mp4& video,int frame) {
-        Character* target=g.NearestOfflineEnemy(&player); Vector2 aim=target?target->GetPosition():Vector2{g.worldWidth/2,g.worldHeight/2};
-        float distance=std::hypot(aim.x-player.GetPosition().x,aim.y-player.GetPosition().y);
-        bool threat=false;
-        for(auto& bot:g.bots) if(g.OfflineEnemies(&player,bot.get())) for(auto& bullet:bot->GetProjectiles()) {
-            Vector2 q=bullet->GetPosition(),p=player.GetPosition();
-            if(bullet->IsActive() && std::hypot(q.x-p.x,q.y-p.y)<160) threat=true;
-        }
-        player.drive(dt,aim,distance,time,threat);
-        Vector2 cursor=GetWorldToScreen2D(aim,g.camera);
-        SetMouseOffset(0,0); Vector2 mouse=GetMousePosition(); SetMouseOffset((int)(cursor.x-mouse.x),(int)(cursor.y-mouse.y));
-        if(!player.IsDead() && target && distance>330 && distance<600 && std::fmod(time,12.0f)<dt) g.ThrowGrenade(0);
-        if(!player.IsDead() && target && player.GetHealth()<40 && distance<500 && std::fmod(time,16.0f)<dt) g.ThrowGrenade(1);
-        g.Update(dt);
-        player.SetAimTarget(aim);
-        if(player.DidShoot()) video.shot(player.GetWeaponIndex(),frame,0.55f);
-        for(auto& bot:g.bots) if(bot->DidShoot()) {
-            float d=std::hypot(bot->GetPosition().x-player.GetPosition().x,bot->GetPosition().y-player.GetPosition().y);
-            video.shot(bot->GetWeaponIndex(),frame,0.32f*std::clamp(1-d/1400,0.0f,1.0f));
-        }
-    }
-};
-
 void extract(const wchar_t* path) {
     hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED)); hr(MFStartup(MF_VERSION));
     IMFAttributes* attributes=nullptr; hr(MFCreateAttributes(&attributes,1));
@@ -211,10 +137,10 @@ void extract(const wchar_t* path) {
     IMFSourceReader* reader=nullptr; hr(MFCreateSourceReaderFromURL(path,attributes,&reader)); release(attributes);
     IMFMediaType* type=nullptr; hr(MFCreateMediaType(&type)); hr(type->SetGUID(MF_MT_MAJOR_TYPE,MFMediaType_Video)); hr(type->SetGUID(MF_MT_SUBTYPE,MFVideoFormat_RGB32));
     hr(reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,nullptr,type)); release(type);
-    for(int i=0;i<1500;++i) {
+    for(int i=0;i<FRAMES;++i) {
         IMFSample* s=nullptr; DWORD flags=0; hr(reader->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM,0,nullptr,&flags,nullptr,&s));
         if(flags&MF_SOURCE_READERF_ENDOFSTREAM) break;
-        if(s && (i==0 || i==300 || i==750 || i==1140)) {
+        if(s && (i==45 || i==120 || i==225 || i==690 || i==1200 || i==1530 || i==1890)) {
             IMFMediaBuffer* b=nullptr; hr(s->ConvertToContiguousBuffer(&b)); BYTE* data=nullptr; DWORD length=0; hr(b->Lock(&data,nullptr,&length));
             IMFMediaType* decoded=nullptr; hr(reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM,&decoded));
             UINT32 width=0,height=0,pitch=0; hr(MFGetAttributeSize(decoded,MF_MT_FRAME_SIZE,&width,&height));
@@ -225,58 +151,309 @@ void extract(const wchar_t* path) {
                 const BYTE* pixel=data+(stride<0?(height-1-y)*(-stride):y*stride)+x*4;
                 int p=y*width+x; out[p*4]=pixel[2]; out[p*4+1]=pixel[1]; out[p*4+2]=pixel[0]; out[p*4+3]=255;
             }
-            ExportImage(image,TextFormat("bin/review/riot-decoded-%04d.png",i)); UnloadImage(image);
+            ExportImage(image,TextFormat("bin/review/highlight-decoded-%04d.png",i)); UnloadImage(image);
             hr(b->Unlock()); release(b);
         }
         release(s);
-        if(i>=1140) break;
+        
     }
     release(reader); MFShutdown(); CoUninitialize();
+}
+
+namespace {
+float length(Vector2 p) { return std::hypot(p.x,p.y); }
+Vector2 sub(Vector2 a,Vector2 b) { return {a.x-b.x,a.y-b.y}; }
+Vector2 norm(Vector2 p) { float d=length(p); return d>0.001f?Vector2{p.x/d,p.y/d}:Vector2{}; }
+float ease(float t) { t=std::clamp(t,0.0f,1.0f);return t*t*(3-2*t); }
+}
+class FilmBot : public BotEnemy {
+public:
+    FilmBot(Vector2 p,int index):BotEnemy(p,CharacterPreview::BodyPath(index%4+1)) {
+        speed=160; SetWeaponSkin(0x10000|((index%4)*0x5555)); SwitchWeapon(index%WeaponCount);
+    }
+    void move(Vector2 direction,float dt) {
+        if(GetFlashBlind()>0 || IsDead()) {SetState(IsDead()?CharState::DEATH:CharState::IDLE);return;}
+        if(dashTimer<=0) {position.x+=direction.x*speed*dt;position.y+=direction.y*speed*dt;}
+        SetState(jumpHeight>1?(jumpVelocity>0?CharState::JUMP_START:CharState::FALL):length(direction)>.05f?CharState::WALK:CharState::IDLE);
+    }
+};
+struct FilmActor {
+    FilmBot* body; Vector2 spawn; float deadTime=0,repath=0,nextJump=0,nextDash=0,nextBurst=0;
+    std::vector<Vector2> path;
+};
+struct FilmScene {
+    std::unique_ptr<GameplayScreen> game;
+    std::vector<FilmActor> actors;
+    std::vector<Rectangle> walls;
+    std::vector<bool> walk;
+    Vector2 cameraCenter{2400,1600}; float zoom=.55f,time=0,nextThrow=1.2f;
+    int throwCount=0,focus=0,shots=0,jumps=0,throws[3]{},kills=0,respawns=0;
+    float nextFocus=0,shake=0,minSeparation=10000;
+    static constexpr int NX=75,NY=50; static constexpr float Cell=64;
+    bool clear(Vector2 p,float radius=16) const {
+        if(p.x<300 || p.x>4500 || p.y<320 || p.y>2860) return false;
+        for(auto r:walls) if(CheckCollisionRecs({p.x-radius,p.y-radius,radius*2,radius*2},r)) return false;
+        return true;
+    }
+    bool visible(Vector2 a,Vector2 b) const {
+        float d=length(sub(b,a));int steps=std::max(1,(int)(d/24));
+        for(int i=0;i<=steps;++i) if(!clear({a.x+(b.x-a.x)*i/steps,a.y+(b.y-a.y)*i/steps},12)) return false;
+        return true;
+    }
+    Vector2 safe(Vector2 p) const {
+        if(clear(p,38))return p;
+        for(int r=64;r<1400;r+=64)for(int j=0;j<24;++j) {
+            Vector2 q{p.x+r*std::cos(j*6.283185f/24),p.y+r*std::sin(j*6.283185f/24)};
+            if(clear(q,38))return q;
+        }
+        throw std::runtime_error("No safe film route");
+    }
+    int cell(Vector2 p) const {return std::clamp((int)(p.y/Cell),0,NY-1)*NX+std::clamp((int)(p.x/Cell),0,NX-1);}
+    Vector2 point(int c) const {return {(c%NX+.5f)*Cell,(c/NX+.5f)*Cell};}
+    std::vector<Vector2> route(Vector2 start,Vector2 goal) const {
+        if(visible(start,goal))return {goal};
+        int a=cell(start),b=cell(goal); if(!walk[b])b=cell(safe(goal));
+        std::vector<int> parent(NX*NY,-1);std::queue<int> q;q.push(a);parent[a]=a;
+        while(!q.empty() && parent[b]<0) {
+            int c=q.front();q.pop();int x=c%NX,y=c/NX;
+            const int dx[]={1,-1,0,0},dy[]={0,0,1,-1};
+            for(int k=0;k<4;++k) {
+                int xx=x+dx[k],yy=y+dy[k];if(xx<0 || xx>=NX || yy<0 || yy>=NY)continue;
+                int n=yy*NX+xx;if(parent[n]<0 && walk[n]) {parent[n]=c;q.push(n);}
+            }
+        }
+        if(parent[b]<0)return {};
+        std::vector<Vector2> out;for(int c=b;c!=a;c=parent[c])out.push_back(point(c));
+        std::reverse(out.begin(),out.end());out.push_back(goal);return out;
+    }
+};
+struct GameplayEffectsTestAccess {
+    static void prepare(FilmScene& s,const char* map) {
+        auto& setup=Offline::Get();setup.mode=Offline::Mode::FreeForAll;setup.bots=0;setup.map=map;
+        setup.killLimit=1000;setup.timeLimit=1800;setup.difficulty=2;
+        NetworkManager::GetInstance().selectedMapName=map;
+        s.game=std::make_unique<GameplayScreen>(GameMode::PRACTICE);auto& g=*s.game;g.cinematicCapture=true;
+        // The normal local player stays outside this spectator-only offline fight.
+        g.player->TakeDamage(1000);g.player->SetPosition({-10000,-10000});
+        for(const auto& group:g.allObjectGroups)for(unsigned i=0;i<group.objectsLength;++i) {
+            const auto& o=group.objects[i];
+            if(o.type==OBJECT_TYPE_RECTANGLE)s.walls.push_back({(float)o.x,(float)o.y,(float)o.width,(float)o.height});
+            else s.walls.push_back(o.aabb);
+        }
+        s.walk.resize(FilmScene::NX*FilmScene::NY);
+        for(int i=0;i<(int)s.walk.size();++i)s.walk[i]=s.clear(s.point(i),26);
+        constexpr int count=12;
+        for(int i=0;i<count;++i) {
+            float angle=i*6.283185f/count;
+            Vector2 p=s.safe({2400+std::cos(angle)*1050,1600+std::sin(angle)*850});
+            // Initial spawn placement is outside the recorded simulation, never a movement shortcut.
+            for(const auto& a:s.actors)if(length(sub(a.spawn,p))<270)p=s.safe({p.x+180,p.y+200});
+            auto actor=std::make_unique<FilmBot>(p,i);
+            actor->SetName(i==0?"@rjltyd":"RIOT "+std::to_string(i+1));actor->SetTeamID(0);
+            FilmBot* ptr=actor.get();g.bots.push_back(std::move(actor));
+            s.actors.push_back({ptr,p,0,i*.04f,1.0f+i*.32f,3.0f+i*.43f,i*.06f,{}});
+        }
+        g.camera.offset={650,340};g.camera.target=s.cameraCenter;g.camera.zoom=s.zoom;
+    }
+    static void step(FilmScene& s,float dt,Mp4* audio,int frame) {
+        auto& g=*s.game;s.time+=dt;g.worldTime=s.time;s.shake=std::max(0.0f,s.shake-dt*25);
+        for(size_t i=0;i<s.actors.size();++i) {
+            auto& a=s.actors[i];auto* c=a.body;Vector2 previous=c->GetPosition();
+            if(c->IsDead()) {
+                a.deadTime+=dt;c->Update(dt);
+                // Standard timed outpost respawn; no mid-fight repositioning or skipped frames.
+                if(a.deadTime>4.2f) {c->ResetHealth(100);c->ResetDeathTimer();c->SetPosition(a.spawn);a.deadTime=0;a.path.clear();++s.respawns;}
+                continue;
+            }
+            Character* enemy=nullptr;float closest=1e9f;
+            for(auto& other:s.actors)if(other.body!=c && !other.body->IsDead()) {
+                float d=length(sub(other.body->GetPosition(),previous));
+                if(d<closest) {closest=d;enemy=other.body;}
+                s.minSeparation=std::min(s.minSeparation,d);
+            }
+            if(!enemy) {c->Update(dt);continue;}
+            Vector2 target=enemy->GetPosition();target.y+=24-enemy->GetJumpHeight();
+            Vector2 forward=norm(sub(target,previous));float side=std::sin(s.time*.55f+i*1.7f)>0?1:-1;
+            float approach=closest>720?.7f:closest<390?-.85f:0;
+            Vector2 direction{forward.x*approach-forward.y*side*.65f,forward.y*approach+forward.x*side*.65f};
+            for(auto& other:s.actors)if(other.body!=c && !other.body->IsDead()) {
+                Vector2 away=sub(previous,other.body->GetPosition());float d=length(away);
+                if(d<330 && d>1) {direction.x+=away.x/d*(330-d)/70;direction.y+=away.y/d*(330-d)/70;}
+            }
+            a.repath-=dt;
+            if(a.repath<=0) {
+                a.repath=.55f;Vector2 desired=s.safe({previous.x+direction.x*260,previous.y+direction.y*260});
+                a.path=s.route(previous,desired);
+            }
+            while(!a.path.empty() && length(sub(a.path.front(),previous))<35)a.path.erase(a.path.begin());
+            Vector2 motion=a.path.empty()?Vector2{}:norm(sub(a.path.front(),previous));
+            c->move(motion,dt);c->SetAimTarget(target);c->SetFaceDirection(target.x>=previous.x?1:-1);
+            if(c->GetFlashBlind()<=0) {
+                if(s.time>a.nextJump && closest<950 && c->GetJumpHeight()<1) {c->SetJumpVelocity(420);a.nextJump=s.time+3.4f+i*.11f;++s.jumps;}
+                if(s.time>a.nextDash && closest<550) {c->ActivateDash(motion);a.nextDash=s.time+5.8f+i*.13f;}
+                if(c->GetHealth()<45 && closest<900)c->ActivateShield();
+                if(c->GetAmmo()==0)c->TriggerReload();
+                // Controlled bursts leave visible movement/reload windows between engagements.
+                if(closest<1450 && s.visible(previous,enemy->GetPosition()) && std::fmod(s.time+i*.3f,1.65f)<.70f) c->Shoot(target);
+            }
+            c->Update(dt);g.ResolveWorldMovement(c,previous);g.ClampCharacterToWorld(c);
+            if(c->DidShoot()) {
+                ++s.shots;float d=length(sub(c->GetPosition(),s.cameraCenter));
+                if(audio && d<1600)audio->shot(c->GetWeaponIndex(),frame,.23f*std::clamp(1-d/1900,.15f,1.0f));
+            }
+        }
+        // Bullet damage and hit tests use the same body boxes and weapon damage as the game.
+        for(auto& a:s.actors)for(auto& bullet:a.body->GetProjectiles())if(bullet->IsActive()) {
+            for(auto& b:s.actors)if(b.body!=a.body && !b.body->IsDead()) {
+                Vector2 p=b.body->GetPosition();p.y-=b.body->GetJumpHeight();
+                if(CheckCollisionCircleRec(bullet->GetPosition(),3,{p.x-22,p.y,44,60})) {
+                    b.body->TakeDamage(bullet->GetDamage());bullet->Deactivate();
+                    if(b.body->IsDead()) {g.RecordOfflineKill(a.body,b.body,bullet->GetWeaponIndex(),bullet->GetWeaponSkin());++s.kills;}
+                    break;
+                }
+            }
+        }
+        if(s.time>=s.nextThrow) {
+            FilmActor* thrower=nullptr;float best=1e9f;
+            for(auto& a:s.actors)if(!a.body->IsDead() && a.body->GetFlashBlind()<=0) {
+                float score=length(sub(a.body->GetPosition(),s.cameraCenter))+((int)(&a-&s.actors[0])==s.focus?0:250);
+                if(score<best){best=score;thrower=&a;}
+            }
+            if(thrower) {
+                auto* c=thrower->body;Character* target=nullptr;float nearest=1e9;
+                for(auto& a:s.actors)if(a.body!=c && !a.body->IsDead()) {float d=length(sub(a.body->GetPosition(),c->GetPosition()));if(d<nearest){nearest=d;target=a.body;}}
+                if(target) {
+                    Vector2 start=c->GetHandPosition(),landing=target->GetPosition();Vector2 d=sub(landing,start);float dist=length(d);
+                    if(dist>650){landing.x=start.x+d.x/dist*650;landing.y=start.y+d.y/dist*650;}
+                    int kind=s.throwCount%3;
+                    g.grenades.push_back({start,landing,0,kind,false,(uint32_t)(thrower-&s.actors[0]+1),0});
+                    ++s.throws[kind];++s.throwCount;
+                    if(audio)audio->effect(5,frame,.35f);
+                    s.focus=(int)(thrower-&s.actors[0]);s.nextFocus=s.time+3.0f;
+                }
+            }
+            s.nextThrow=s.time+2.3f;
+        }
+        for(auto& grenade:g.grenades)if(grenade.kind==0 && grenade.age<.8f && grenade.age+dt>=.8f) {
+            if(audio)audio->effect(3,frame,.85f);
+            s.shake=std::max(s.shake,12.0f*std::clamp(1-length(sub(grenade.target,s.cameraCenter))/1600,.1f,1.0f));
+            Character* owner=grenade.ownerID>0?s.actors[grenade.ownerID-1].body:nullptr;
+            for(auto& a:s.actors)if(!a.body->IsDead() && length(sub(a.body->GetPosition(),grenade.target))<=230) {
+                a.body->TakeDamage(40);if(a.body->IsDead() && owner){g.RecordOfflineKill(owner,a.body,WeaponCount);++s.kills;}
+            }
+        }
+        if(audio)for(auto& grenade:g.grenades)if(grenade.kind==2 && grenade.age<.8f && grenade.age+dt>=.8f)audio->effect(4,frame,.7f);
+        g.UpdateGrenades(dt,false);
+        g.UpdateKillFeed(dt);
+    }
+    static void camera(FilmScene& s,float dt) {
+        if(s.time>=s.nextFocus || s.actors[s.focus].body->IsDead()) {
+            int next=s.focus;float best=-1;
+            for(size_t i=0;i<s.actors.size();++i)if(!s.actors[i].body->IsDead()) {
+                float activity=0;for(auto& a:s.actors)if(a.body!=s.actors[i].body && !a.body->IsDead()) {
+                    float d=length(sub(a.body->GetPosition(),s.actors[i].body->GetPosition()));
+                    if(d>250 && d<1000)activity+=1;
+                }
+                activity+=.7f*std::sin(i*2.7f+s.time*.6f);if((int)i==s.focus)activity-=2;
+                if(activity>best){best=activity;next=(int)i;}
+            }
+            s.focus=next;s.nextFocus=s.time+4.4f;
+        }
+        Vector2 p=s.actors[s.focus].body->GetPosition();Character* enemy=nullptr;float closest=1e9;
+        for(auto& a:s.actors)if(a.body!=s.actors[s.focus].body && !a.body->IsDead()) {
+            float d=length(sub(a.body->GetPosition(),p));if(d<closest){closest=d;enemy=a.body;}
+        }
+        Vector2 target=p;
+        if(enemy){Vector2 q=enemy->GetPosition();target={(p.x+q.x)*.5f,(p.y+q.y)*.5f};}
+        float shot=std::fmod(s.time,12.0f);
+        float desired=shot<4?.52f+ease(shot/4)*.37f:shot<8?.89f+ease((shot-4)/4)*.23f:1.12f-ease((shot-8)/4)*.60f;
+        if(enemy)desired=std::min(desired,std::min(1100.0f/(std::abs(p.x-enemy->GetPosition().x)+330),560.0f/(std::abs(p.y-enemy->GetPosition().y)+260)));
+        desired=std::clamp(desired,.48f,1.12f);
+        s.zoom+=(desired-s.zoom)*(1-std::exp(-dt*1.8f));
+        s.cameraCenter.x+=(target.x-s.cameraCenter.x)*(1-std::exp(-dt*1.0f));
+        s.cameraCenter.y+=(target.y-s.cameraCenter.y)*(1-std::exp(-dt*1.0f));
+        float hw=650/s.zoom+40,hh=340/s.zoom+40;
+        s.cameraCenter.x=std::clamp(s.cameraCenter.x,hw,4800-hw);s.cameraCenter.y=std::clamp(s.cameraCenter.y,hh,3200-hh);
+        auto& camera=s.game->camera;camera.target=s.cameraCenter;camera.zoom=s.zoom;camera.rotation=std::sin(s.time*.23f)*.7f;
+        camera.offset={650+std::sin(s.time*103)*s.shake,340+std::cos(s.time*119)*s.shake};
+    }
+};
+void centered(Font font,const char* text,float y,float size,Color color,float spacing=2) {
+    Vector2 m=MeasureTextEx(font,text,size,spacing);DrawTextEx(font,text,{(W-m.x)/2,y},size,spacing,color);
 }
 int main(int argc,char** argv) {
     try {
         hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED));
-        SetTraceLogLevel(LOG_WARNING); SetConfigFlags(FLAG_WINDOW_HIDDEN); InitWindow(VIRTUAL_WIDTH,VIRTUAL_HEIGHT,"Vanta review export"); InitAudioDevice(); SetMasterVolume(0); SetExitKey(KEY_NULL); SetRandomSeed(20261017);
-        if(argc>1 && std::string(argv[1])=="--extract") { extract(L"bin/review/vanta-ffa-riot-cinematic.mp4"); return 0; }
+        SetTraceLogLevel(LOG_WARNING);SetConfigFlags(FLAG_WINDOW_HIDDEN);InitWindow(VIRTUAL_WIDTH,VIRTUAL_HEIGHT,"Vanta highlight capture");
+        InitAudioDevice();SetMasterVolume(0);SetExitKey(KEY_NULL);SetRandomSeed(20261018);Character::SetCombatAudioEnabled(false);
+        std::filesystem::create_directories("bin/review");
+        if(argc>1 && std::string(argv[1])=="--extract") {extract(L"bin/review/vanta-riot-highlights.mp4");return 0;}
         bool probe=argc>1 && std::string(argv[1])=="--probe";
-        MapRegistry::GetInstance().LoadAllMaps(); NetworkManager::GetInstance().Initialize();
-        auto canvas=LoadRenderTexture(W,H);
-        auto gameFrame=LoadRenderTexture(VIRTUAL_WIDTH,VIRTUAL_HEIGHT);
-        Mp4 video(L"bin/review/vanta-ffa-riot-cinematic.mp4");
-        NetworkManager::GetInstance().localUsername="@rjltyd";
-        auto& setup=Offline::Get(); setup.mode=Offline::Mode::FreeForAll; setup.bots=3;
-        setup.difficulty=2; setup.playerTeam=1; setup.killLimit=100; setup.timeLimit=1800;
-        auto maps=MapRegistry::GetInstance().GetMapNames();
-        setup.map=MapRegistry::GetInstance().HasMap("Forest2")?"Forest2":maps.front();
-        NetworkManager::GetInstance().selectedMapName=setup.map;
-        auto game=std::make_unique<GameplayScreen>(GameMode::PRACTICE);
-        auto* player=GameplayEffectsTestAccess::prepare(*game);
-        // Let the four solo fighters meet naturally after leaving separate outposts.
-        float time=0; constexpr float dt=1.0f/90;
-        for(int i=0;i<2700;++i) {
-            GameplayEffectsTestAccess::step(*game,*player,dt,time,video,-1); time+=dt;
-            if(i>720 && !player->IsDead() && player->GetHealth()>70) break;
-        }
-        int count=probe?3:FRAMES;
+        MapRegistry::GetInstance().LoadAllMaps();NetworkManager::GetInstance().Initialize();
+        FilmScene scene[3];const char* maps[]={"MagmaRift","AbandonedFoundry","DesertOutpost"};
+        const char* names[]={"MAGMA RIFT","ABANDONED FOUNDRY","DESERT OUTPOST"};
+        for(int i=0;i<3;++i)GameplayEffectsTestAccess::prepare(scene[i],maps[i]);
+        Font font=LoadFontEx("assets/fonts/BruceForeverRegular-X3jd2.ttf",180,nullptr,0);SetTextureFilter(font.texture,TEXTURE_FILTER_BILINEAR);
+        auto canvas=LoadRenderTexture(W,H),gameFrame=LoadRenderTexture(VIRTUAL_WIDTH,VIRTUAL_HEIGHT),previousFrame=LoadRenderTexture(VIRTUAL_WIDTH,VIRTUAL_HEIGHT);
+        Mp4 video(L"bin/review/vanta-riot-highlights.mp4");
+        // Record the actual complete game intro, followed by 18 continuous seconds per arena.
+        int introFrames=0;
+        { FirstScreen timing; do {++introFrames;}while(timing.Update(1.0f/FPS) && introFrames<900); }
+        FirstScreen originalIntro;
+        float introDuration=introFrames/(float)FPS;
+        int totalFrames=introFrames+55*FPS;
+        int count=probe?introFrames+12*FPS:totalFrames;
+        std::cout<<"Original game intro: "<<introFrames<<" frames, video "<<count<<" frames"<<std::endl;
+        int lastMap=-1;
         for(int frame=0;frame<count;++frame) {
-            constexpr int steps=4; float stepTime=PLAYBACK_SPEED/(FPS*steps);
-            for(int step=0;step<steps;++step) { GameplayEffectsTestAccess::step(*game,*player,stepTime,time,video,frame); time+=stepTime; }
-            int skipped=0;
-            while(!GameplayEffectsTestAccess::frameCamera(*game,time) && skipped<1800) {
-                GameplayEffectsTestAccess::step(*game,*player,stepTime,time,video,-1); time+=stepTime; ++skipped;
+            float t=frame/(float)FPS;float gameplayTime=t-introDuration;int map=std::clamp((int)(gameplayTime/18),0,2);float local=gameplayTime-map*18;
+            if(gameplayTime>=0 && gameplayTime<54) {
+                if(lastMap!=map && lastMap>=0) {
+                    BeginTextureMode(previousFrame);ClearBackground(BLACK);
+                    DrawTexturePro(gameFrame.texture,{0,0,(float)VIRTUAL_WIDTH,-(float)VIRTUAL_HEIGHT},{0,0,(float)VIRTUAL_WIDTH,(float)VIRTUAL_HEIGHT},{0,0},0,WHITE);EndTextureMode();
+                }
+                lastMap=map;
+                constexpr int substeps=4;float dt=PLAYBACK_SPEED/(FPS*substeps);
+                for(int step=0;step<substeps;++step)GameplayEffectsTestAccess::step(scene[map],dt,&video,frame);
+                GameplayEffectsTestAccess::camera(scene[map],1.0f/FPS);scene[map].game->Draw(gameFrame);
             }
-            if(skipped>=1800) throw std::runtime_error("No active duel for cinematic capture");
-            game->Draw(gameFrame);
-            BeginTextureMode(canvas); ClearBackground(BLACK);
-            DrawTexturePro(gameFrame.texture,{0,0,(float)VIRTUAL_WIDTH,-(float)VIRTUAL_HEIGHT},{0,0,(float)W,(float)H},{0,0},0,WHITE);
+            if(frame<introFrames) { originalIntro.Update(1.0f/FPS);originalIntro.Draw(gameFrame); }
+            BeginTextureMode(canvas);ClearBackground(BLACK);
+            if(frame<introFrames) {
+                DrawTexturePro(gameFrame.texture,{0,0,(float)VIRTUAL_WIDTH,-(float)VIRTUAL_HEIGHT},{0,38,(float)W,1004},{0,0},0,WHITE);
+            }
+            else if(gameplayTime<54) {
+                Rectangle source{0,0,(float)VIRTUAL_WIDTH,-(float)VIRTUAL_HEIGHT},dest{0,38,(float)W,1004};
+                DrawTexturePro(gameFrame.texture,source,dest,{0,0},0,WHITE);
+                if(map>0 && local<.65f) {
+                    // A brief exposure dissolve connects maps, without skipping any gameplay simulation.
+                    DrawTexturePro(previousFrame.texture,source,dest,{0,0},0,Fade(WHITE,1-ease(local/.65f)));
+                    DrawRectangleRec(dest,Fade(Color{245,214,166,255},std::sin(local/.65f*3.14159f)*.13f));
+                }
+                float title=std::min(ease(local/.6f),ease((3.5f-local)/.7f));
+                if(title>0) {
+                    DrawRectangleGradientV(0,770,W,272,BLANK,Fade(BLACK,.55f*title));
+                    DrawTextEx(font,"VANTA / RIOT",{94,849},20,2,Fade(Color{235,195,99,255},title));
+                    DrawTextEx(font,names[map],{90,890},49,2,Fade(RAYWHITE,title));
+                    DrawTextEx(font,"12 FIGHTERS  /  FREE FOR ALL",{94,957},16,2,Fade(RAYWHITE,title*.65f));
+                }
+                if(gameplayTime<.5f)DrawRectangle(0,0,W,H,Fade(BLACK,1-ease(gameplayTime/.5f)));
+                if(gameplayTime>53)DrawRectangle(0,0,W,H,Fade(BLACK,ease(gameplayTime-53)));
+            } else {centered(font,"VANTA",420,112,Fade(RAYWHITE,1-ease(gameplayTime-54)));}
             EndTextureMode();
-            // The footage fills the frame, with the game's original HUD and camera.
             video.frame(canvas,frame,count);
-            if(frame%150==0) { Image image=LoadImageFromTexture(canvas.texture); ImageFlipVertical(&image); ExportImage(image,TextFormat("bin/review/riot-%04d.png",frame)); UnloadImage(image); std::cout<<"Exported "<<frame<<" / "<<count<<std::endl; }
-            BeginDrawing(); ClearBackground(BLACK); EndDrawing();
+            if(frame%150==0 || frame==45 || frame==120) {
+                Image image=LoadImageFromTexture(canvas.texture);ImageFlipVertical(&image);
+                ExportImage(image,TextFormat("bin/review/highlight-%04d.png",frame));UnloadImage(image);
+                std::cout<<"Exported "<<frame<<" / "<<count<<std::endl;
+            }
+            BeginDrawing();ClearBackground(BLACK);EndDrawing();
         }
-        video.finish(); game.reset();
-        std::cout<<"MP4 export complete"<<std::endl;
-    } catch(const std::exception& error) { std::cerr<<error.what()<<std::endl; return 1; }
+        video.finish();
+        std::ofstream report("bin/review/highlight-capture-report.txt");
+        report<<"Native VANTA renderer, offline FFA AI. 1920x1080, 30 fps, 1.12x playback.\nNo simulation skips. Camera only: smooth zoom, pan, roll, impact shake.\n";
+        for(int i=0;i<3;++i)report<<maps[i]<<": simulated="<<scene[i].time<<" shots="<<scene[i].shots<<" jumps="<<scene[i].jumps<<" frag="<<scene[i].throws[0]<<" smoke="<<scene[i].throws[1]<<" flash="<<scene[i].throws[2]<<" kills="<<scene[i].kills<<" timed respawns="<<scene[i].respawns<<" minimum spacing="<<scene[i].minSeparation<<"\n";
+        std::cout<<"Highlight MP4 complete"<<std::endl;
+    }catch(const std::exception& e){std::cerr<<e.what()<<std::endl;return 1;}
     return 0;
 }
