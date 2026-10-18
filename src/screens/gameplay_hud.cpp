@@ -5,6 +5,7 @@
 #include "../ui/ui_widgets.h"
 #include "../rules/match_rules.h"
 #include "../rules/flag_rules.h"
+#include "../ui/weapon_skin_catalog.h"
 #include <algorithm>
 #include <cmath>
 
@@ -57,9 +58,7 @@ void GameplayScreen::DrawHud() {
         elimination ? TextFormat("ROUND %d / FIRST TO %d",currentRoundNumber,offlineSetup.roundLimit) : TextFormat("FIRST TO %d KILLS",offlineSetup.killLimit) :
         elimination ? "ONE LIFE. MAKE IT COUNT." : nm.killLimit>0 ? TextFormat("FIRST TO %d KILLS",nm.killLimit) : "MOST KILLS WINS";
     centered(objective,650,100,12,muted);
-    Color connection = !practice && nm.GetPingMs()>150 ? ORANGE : cyan;
-    for (int i=0;i<3;++i) DrawRectangle(1197+i*6,39-i*4,3,5+i*4,Fade(connection,0.5f+i*0.2f));
-    right(practice ? TextFormat("OFFLINE / %s / %d BOTS",Offline::Difficulty(offlineSetup.difficulty),(int)bots.size()) : nm.IsHost() ? "ONLINE / HOST" : TextFormat("ONLINE / %d MS",nm.GetPingMs()),1260,54,12,muted);
+    DrawKillFeed();
 
     if (flagRace && matchEndTimer<=0) {
         for (int team=1;team<=2;++team) {
@@ -166,9 +165,9 @@ void GameplayScreen::DrawHud() {
     skill(794,"SMOKE",Settings::Smoke,grenadeCooldown[1],12,false,green,3);
 
     // Ammo uses typography and a thin progress arc, without stacked weapon boxes.
-    const char* weapons[]={"SMG","SHOTGUN","PISTOL"};
-    int weapon=std::clamp(player->GetWeaponIndex(),0,2);
-    right(weapons[weapon],1260,552,18,gold);
+
+    int weapon=std::clamp(player->GetWeaponIndex(),0,WeaponCount-1);
+    right(WeaponName(weapon),1260,552,18,gold);
     right(TextFormat("%02d",player->GetAmmo()),1186,579,52,player->GetAmmo()<=3 ? ORANGE : white);
     text(TextFormat("/ %02d",player->GetMaxAmmo()),1202,605,20,muted);
     float ammoProgress=player->IsReloading() ? player->GetReloadProgress() : (float)player->GetAmmo()/player->GetMaxAmmo();
@@ -176,9 +175,9 @@ void GameplayScreen::DrawHud() {
     DrawLineEx({1090,639},{1090+170*std::clamp(ammoProgress,0.0f,1.0f),639},2,player->IsReloading() ? cyan : gold);
     right(player->IsReloading() ? TextFormat("RELOADING %02d%%",(int)(100*player->GetReloadProgress())) :
         TextFormat("[%s] RELOAD",Settings::KeyLabel(Settings::Reload)),1260,650,10,player->IsReloading() ? cyan : muted);
-    for (int i=0;i<3;++i) {
-        int x=1003+i*87;
-        text(TextFormat("%d %s",i+1,weapons[i]),x,521,10,i==weapon ? gold : Fade(muted,0.65f));
+    for (int i=0;i<WeaponCount;++i) {
+        int x=902+i*72;
+        text(TextFormat("%d %s",i+1,WeaponShortName(i)),x,521,9,i==weapon ? gold : Fade(muted,0.65f));
         if (i==weapon) DrawLineEx({(float)x,539},{(float)x+20,539},2,gold);
     }
     centered("ESC  MENU     F10  SETTINGS     TAB  SCORES",650,672,8,Fade(muted,0.7f));
@@ -207,5 +206,54 @@ void GameplayScreen::DrawHud() {
         DrawRectangleLinesEx({3,3,VIRTUAL_WIDTH-6.0f,VIRTUAL_HEIGHT-6.0f},6,Fade(RED,damageFlash*0.6f));
         Vector2 p=player->GetPosition(); float angle=std::atan2(damageSource.y-p.y,damageSource.x-p.x);
         DrawCircleV({VIRTUAL_WIDTH/2.0f+std::cos(angle)*90,VIRTUAL_HEIGHT/2.0f+std::sin(angle)*90},7,Fade(RED,damageFlash*2));
+    }
+}
+
+void GameplayScreen::DrawKillFeed() {
+    auto shortened=[](std::string value,int width) {
+        for(auto& c:value) if((unsigned char)c<32) c=' ';
+        if(MeasureText(value.c_str(),14)<=width) return value;
+        while(!value.empty() && MeasureText((value+"...").c_str(),14)>width) value.pop_back();
+        return value+"...";
+    };
+    for(size_t i=0;i<killFeed.size();++i) {
+        const auto& entry=killFeed[i];
+        float opacity=std::clamp(entry.remaining/1.2f,0.0f,1.0f);
+        float enter=std::clamp((7-entry.remaining)/.18f,0.0f,1.0f);
+        opacity*=enter;
+        int shift=(int)((1-enter)*10),y=35+(int)i*32;
+        Color killer=entry.localKill?Color{244,204,128,255}:entry.killerTeam==1?UiTheme::TeamBlue():entry.killerTeam==2?UiTheme::TeamRed():Color{238,244,248,255};
+        Color victim=entry.localDeath?Color{255,115,111,255}:entry.victimTeam==1?UiTheme::TeamBlue():entry.victimTeam==2?UiTheme::TeamRed():Color{196,209,219,255};
+        DrawRectangleGradientH(950+shift,y-4,314,26,Fade(Color{6,15,24,255},opacity*.08f),Fade(Color{6,15,24,255},opacity*.58f));
+        auto label=[&](const std::string& value,int x,Color color) {
+            DrawText(value.c_str(),x+shift+1,y+2,14,Fade(BLACK,opacity*.85f));
+            DrawText(value.c_str(),x+shift,y+1,14,Fade(color,opacity));
+        };
+        std::string attacker=shortened(entry.killer,110),target=shortened(entry.victim,108);
+        label(attacker,1072-MeasureText(attacker.c_str(),14),killer);
+        label(target,1152,victim);
+        if(entry.weapon<WeaponCount) {
+            Texture2D texture=LoadWeaponSlotTexture(entry.weapon,entry.skin);
+            if(texture.id) {
+                Rectangle source=GetWeaponGeometry(texture,entry.weapon).bounds;
+                if(source.width>0 && source.height>0) {
+                    float fit=std::min(62/source.width,21/source.height);
+                    Rectangle destination{1112.0f+shift,y+10.0f,source.width*fit,source.height*fit};
+                    DrawWeaponSkinTexture(texture,source,destination,{destination.width/2,destination.height/2},0,entry.weapon,entry.skin,opacity);
+                }
+            }
+        } else {
+            Color color=entry.weapon==WeaponCount+1?Color{154,248,67,255}:Color{233,192,107,255};
+            Vector2 center{1112.0f+shift,y+11.0f};
+            DrawCircleV(center,6,Fade(color,opacity*.28f));
+            DrawCircleLinesV(center,6,Fade(color,opacity));
+            DrawLineEx({center.x-2,center.y-7},{center.x+1,center.y-10},2,Fade(color,opacity));
+            DrawLineEx({center.x+1,center.y-10},{center.x+6,center.y-8},1,Fade(color,opacity));
+            if(entry.weapon==WeaponCount+1) {
+                DrawCircleV({center.x-12,center.y+1},2,Fade(color,opacity*.55f));
+                DrawCircleV({center.x+12,center.y-3},3,Fade(color,opacity*.35f));
+            }
+        }
+        if(entry.localKill || entry.localDeath) DrawLineEx({1265.0f+shift,y+1.0f},{1265.0f+shift,y+17.0f},2,Fade(entry.localDeath?victim:killer,opacity));
     }
 }

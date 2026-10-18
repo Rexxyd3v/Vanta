@@ -1,33 +1,21 @@
-#ifndef WEAPON_SKIN_PREVIEW_H
-#define WEAPON_SKIN_PREVIEW_H
-
+#pragma once
 #include "ui_widgets.h"
 #include "weapon_skin_catalog.h"
-
+#include <array>
 class WeaponSkinPreview {
 public:
-    WeaponSkinPreview(int skinId = 0);
-    ~WeaponSkinPreview();
-
-    void SetSkin(int skinId);
-    void Update(float deltaTime);
-    void DrawPreview(Rectangle area, int skinId, Font font);
-    int DrawSelector(Rectangle area, Font font, int& selectedSkin, Vector2 mouse);
-
-
+    WeaponSkinPreview(int selection=0);
+    void SetSkin(int selection);
+    void Update(float dt);
+    void DrawPreview(Rectangle area,int selection,Font font);
+    int DrawSelector(Rectangle area,Font font,int& skin,Vector2 mouse);
     int GetSelectedWeaponSlot() const { return selectedWeaponSlot; }
-    void SetSelectedWeaponSlot(int slot) { selectedWeaponSlot = slot; }
+    void SetSelectedWeaponSlot(int slot) { selectedWeaponSlot=std::clamp(slot,0,WeaponCount-1); }
     int GetWeaponSkin(int slot) const { return selectedSkins[slot]; }
-
+    int GetPackedSkins() const { return PackWeaponSkins(selectedSkins); }
+    void SelectSkin(int slot,int skin,bool persist=true);
 private:
-    int skinId;
-    std::vector<Texture2D> weaponTextures;
-    float rotation; // for gentle sway
-    int selectedWeaponSlot; // 0 = SMG, 1 = Shotgun, 2 = Pistol
-    int selectedSkins[3];   // Selected skin index per weapon
-    float hoverPrev;
-    float hoverNext;
-    Rectangle lastArea;
+    int selectedWeaponSlot=0;
+    std::array<int,WeaponCount> selectedSkins{};
+    float rotation=0;
 };
-
-#endif // WEAPON_SKIN_PREVIEW_H

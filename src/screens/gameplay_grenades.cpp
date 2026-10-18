@@ -48,12 +48,12 @@ void GameplayScreen::ApplyPoisonDamage(const GrenadeEffect& g, Character* victim
     else if (g.local) RegisterHit(victim->GetPosition(),before-victim->GetHealth());
     if (!victim->IsDead()) return;
     if (currentMode == GameMode::PRACTICE) {
-        RecordOfflineKill(player,victim);
+        RecordOfflineKill(player,victim,WeaponCount+g.kind);
     } else if (localVictim) {
         // Each receiver applies its own exposure exactly once; the death event shares attribution.
-        ProcessKill(g.ownerID,nm.GetLocalPlayerID());
+        ProcessKill(g.ownerID,nm.GetLocalPlayerID(),WeaponCount+g.kind);
         PacketPlayerKilled p{}; p.header={PacketType::PLAYER_KILLED,nm.GetLocalPlayerID()};
-        p.killerPlayerID=g.ownerID; p.victimPlayerID=nm.GetLocalPlayerID();
+        p.killerPlayerID=g.ownerID; p.victimPlayerID=nm.GetLocalPlayerID(); p.weaponIndex=WeaponCount+g.kind;
         nm.SendPacket(&p,sizeof(p),true);
         if (nm.currentGameMode==OnlineGameMode::ELIMINATION) isSpectating=true;
     }
@@ -95,12 +95,12 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
             if (currentMode == GameMode::ONLINE) {
                 if (Rules::FriendlyFire(nm.currentGameMode != OnlineGameMode::FREE_FOR_ALL, g.ownerTeam, victim->GetTeamID())) return;
                 PacketPlayerDamage d{}; d.header = {PacketType::PLAYER_DAMAGE, g.ownerID};
-                d.targetPlayerID = id; d.damageAmount = 40; nm.SendPacket(&d, sizeof(d), true);
+                d.targetPlayerID = id; d.damageAmount = 40; d.weaponIndex=WeaponCount+g.kind; nm.SendPacket(&d, sizeof(d), true);
                 RegisterHit(victim->GetPosition(), 40);
             } else {
                 float hp = victim->GetHealth(); victim->TakeDamage(40);
                 if (victim->GetHealth() < hp) RegisterHit(victim->GetPosition(), hp-victim->GetHealth());
-                if (victim->IsDead()) RecordOfflineKill(player,victim);
+                if (victim->IsDead()) RecordOfflineKill(player,victim,WeaponCount+g.kind);
             }
         };
         if (currentMode == GameMode::PRACTICE) for (auto& bot : bots) damage(bot.get(), 0);

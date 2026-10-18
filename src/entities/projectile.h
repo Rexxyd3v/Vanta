@@ -14,8 +14,12 @@ public:
     void    Deactivate();   // Force-deactivate on hit
     Vector2 GetPosition() const;
     float   GetDamage() const { return damage; }
+    void SetWeaponSource(int slot,int skin) { weaponIndex=slot; weaponSkin=skin; }
+    int GetWeaponIndex() const { return weaponIndex; }
+    int GetWeaponSkin() const { return weaponSkin; }
 
 private:
+    int weaponIndex=0,weaponSkin=0;
     Vector2 position;
     Vector2 direction;
     float   speed;

@@ -30,6 +30,7 @@ void Player::Update(float deltaTime) {
         return;
     }
 
+    bool wasDashing = dashTimer > 0.0f;
     UpdateSkills(deltaTime);
 
     if (currentShootCooldown > 0) currentShootCooldown -= deltaTime;
@@ -71,7 +72,7 @@ void Player::Update(float deltaTime) {
         ActivateShield();
     }
 
-    if (dashTimer <= 0.0f) {
+    if (!wasDashing && dashTimer <= 0.0f) {
         position.x += velocity.x * deltaTime;
         position.y += velocity.y * deltaTime;
     }
@@ -113,12 +114,16 @@ void Player::Update(float deltaTime) {
         if (IsKeyPressed(KEY_ONE)) SwitchWeapon(0);
         if (IsKeyPressed(KEY_TWO)) SwitchWeapon(1);
         if (IsKeyPressed(KEY_THREE)) SwitchWeapon(2);
+        if (IsKeyPressed(KEY_FOUR)) SwitchWeapon(3);
+        if (IsKeyPressed(KEY_FIVE)) SwitchWeapon(4);
     } else {
         if (IsKeyDown(KEY_M) || IsKeyDown(KEY_KP_0)) Shoot(aimTarget);
         if (Settings::Pressed(Settings::Reload)) TriggerReload();
         if (IsKeyPressed(KEY_SEVEN)) SwitchWeapon(0);
         if (IsKeyPressed(KEY_EIGHT)) SwitchWeapon(1);
         if (IsKeyPressed(KEY_NINE)) SwitchWeapon(2);
+        if (IsKeyPressed(KEY_ZERO)) SwitchWeapon(3);
+        if (IsKeyPressed(KEY_MINUS)) SwitchWeapon(4);
     }
 
     animations[currentState]->Update(deltaTime);

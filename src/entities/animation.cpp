@@ -1,4 +1,5 @@
 #include "animation.h"
+#include <map>
 #include "../utils/texture_manager.h"
 
 Animation::Animation(const std::string& pathPrefix, int frameCount, float frameDuration, bool loop) 
@@ -62,4 +63,25 @@ int Animation::FrameWidth() const {
 int Animation::FrameHeight() const {
     if (frames.empty()) return 0;
     return frames[0].height;
+}
+
+float Animation::GroundFootOffset(float scale) const {
+    if (!HasFrames()) return 0;
+    // Cache the visible foot row; transparent sprite padding is not physical terrain.
+    static std::map<unsigned int,int> rows;
+    const auto& texture=frames.front();
+    auto found=rows.find(texture.id);
+    if(found==rows.end()) {
+        Image image=LoadImageFromTexture(texture);
+        Color* pixels=LoadImageColors(image);
+        int bottom=image.height/2;
+        if(pixels) for(int y=image.height-1;y>=0;--y) {
+            int solid=0;
+            for(int x=0;x<image.width;x+=2) if(pixels[y*image.width+x].a>40) ++solid;
+            if(solid>=4) { bottom=y+1;break; }
+        }
+        if(pixels) UnloadImageColors(pixels);
+        UnloadImage(image);found=rows.emplace(texture.id,bottom).first;
+    }
+    return (found->second-texture.height*0.5f)*scale;
 }

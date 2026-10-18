@@ -25,7 +25,7 @@ BotEnemy::BotEnemy(Vector2 startPosition, const std::string& assetPath)
     this->speed = BOT_SPEED;
     this->shootCooldown = BOT_SHOOT_COOLDOWN;
     this->health = 100.0f;
-    this->currentWeaponIndex = GetRandomValue(0, 2); // Random weapon for variety
+    this->currentWeaponIndex = GetRandomValue(0, WeaponCount-1); // Random weapon for variety
     this->targetPosition = startPosition;
     this->respawnDelay = (float)GetRandomValue(25, 40) / 10.0f; // 2.5-4.0s
 }
@@ -301,7 +301,7 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
         if (distance < (difficulty==0 ? 650.0f : difficulty==1 ? 900.0f : 1150.0f) && currentShootCooldown <= 0.0f) {
             const int spread[]={90,38,8};
             Shoot({playerPosition.x+GetRandomValue(-spread[difficulty],spread[difficulty]), playerPosition.y+GetRandomValue(-spread[difficulty],spread[difficulty])});
-            currentShootCooldown = shootCooldown + ((float)GetRandomValue(0, 10) / 30.0f);
+            currentShootCooldown = std::max(shootCooldown,Weapons[currentWeaponIndex].fireRate) + ((float)GetRandomValue(0, 10) / 30.0f);
         }
 
         // ---- JUMP / FALL state picking (override walk/idle) ----

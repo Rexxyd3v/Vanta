@@ -29,10 +29,14 @@ void GameplayScreen::RespawnLocal() {
     }
 }
 
-void GameplayScreen::ProcessKill(uint32_t killer, uint32_t victim) {
+void GameplayScreen::ProcessKill(uint32_t killer, uint32_t victim,int weapon,int skin) {
     auto& nm = NetworkManager::GetInstance();
     if (matchEndTimer > 0 || !nm.FindPlayer(killer) || !nm.FindPlayer(victim)) return;
     if (!eliminated.insert(victim).second) return;
+    const auto* killerInfo=nm.FindPlayer(killer);
+    const auto* victimInfo=nm.FindPlayer(victim);
+    AddKillFeed(killerInfo->username,victimInfo->username,weapon,skin,killerInfo->teamID,victimInfo->teamID,
+                killer==nm.GetLocalPlayerID(),victim==nm.GetLocalPlayerID());
     if (killer != victim) {
         if (killer == nm.GetLocalPlayerID()) nm.localKills++;
         else if (auto* rp = FindByPeerID(killer)) rp->AddKill();
@@ -111,4 +115,23 @@ void GameplayScreen::UpdateMatchFlow(float dt) {
         p.elapsed = elapsed; p.grScore = nm.teamScores[1]; p.blScore = nm.teamScores[2]; p.finished = finished; p.winner = matchWinner;
         nm.SendPacket(&p, sizeof(p), true);
     }
+}
+
+void GameplayScreen::AddKillFeed(const std::string& killer,const std::string& victim,int weapon,int skin,
+                               int killerTeam,int victimTeam,bool localKill,bool localDeath) {
+    KillFeedEntry entry;
+    entry.killer=killer.empty()?"Player":killer;
+    entry.victim=victim.empty()?"Player":victim;
+    entry.weapon=std::clamp(weapon,0,WeaponCount+1); entry.skin=skin;
+    entry.killerTeam=killerTeam; entry.victimTeam=victimTeam;
+    entry.localKill=localKill; entry.localDeath=localDeath;
+    killFeed.insert(killFeed.begin(),std::move(entry));
+    if(killFeed.size()>5) killFeed.resize(5);
+}
+void GameplayScreen::UpdateKillFeed(float dt) {
+    if(!std::isfinite(dt) || dt<=0) return;
+    for(auto& entry:killFeed) entry.remaining-=dt;
+    killFeed.erase(std::remove_if(killFeed.begin(),killFeed.end(),[](const KillFeedEntry& entry){
+        return entry.remaining<=0;
+    }),killFeed.end());
 }

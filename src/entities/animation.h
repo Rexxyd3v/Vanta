@@ -16,6 +16,7 @@ public:
     bool IsFinished() const;
     int FrameWidth() const;
     int FrameHeight() const;
+    float GroundFootOffset(float scale) const;
     bool HasFrames() const { return !frames.empty() && frames[0].id != 0; }
 
 private:

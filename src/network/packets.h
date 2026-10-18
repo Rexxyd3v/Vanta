@@ -74,6 +74,7 @@ struct PacketPlayerUpdate {
     float jumpVelocity;
     char username[16];
     int charSkin;
+    float dashTimer = 0, shieldTimer = 0;
     int weaponSkin;        // WeaponSkinId enum value
 };
 
@@ -92,12 +93,14 @@ struct PacketPlayerDamage {
     PacketHeader header;
     uint32_t targetPlayerID; // Authoritative ID of damaged player (assigned by host)
     float damageAmount;
+    int weaponIndex=0,weaponSkin=0; // Captured when the projectile was fired.
 };
 
 struct PacketPlayerKilled {
     PacketHeader header;
     uint32_t killerPlayerID; // Authoritative ID of killer
     uint32_t victimPlayerID; // Authoritative ID of victim
+    int weaponIndex=0,weaponSkin=0; // 0..4 guns, 5 grenade, 6 poison.
 };
 
 struct PacketPlayerRespawn {

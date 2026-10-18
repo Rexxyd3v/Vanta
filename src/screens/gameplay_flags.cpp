@@ -16,7 +16,7 @@ bool GameplayScreen::IsFlagDeathmatch() const {
         NetworkManager::GetInstance().currentGameMode==OnlineGameMode::DEATHMATCH;
 }
 Vector2 GameplayScreen::GroundPoint(Vector2 anchor) const {
-    return {anchor.x,anchor.y+(player->GetDepthY()-player->GetPosition().y+player->GetJumpHeight())*0.70f};
+    return {anchor.x,anchor.y+player->GetFeetOffset()};
 }
 bool GameplayScreen::HasTeamBases() const {
     return currentMode==GameMode::PRACTICE?Offline::TeamMode(offlineSetup.mode):NetworkManager::GetInstance().currentGameMode!=OnlineGameMode::FREE_FOR_ALL;

@@ -30,6 +30,9 @@ void Load() {
         else if (key == "effects") prefs.effects = value != 0;
         else if (key == "fps") prefs.showFps = value != 0;
         else if (key == "difficulty") prefs.difficulty = (int)std::clamp(value, 0.0f, 2.0f);
+        else if(key.rfind("weaponSkin",0)==0) {
+            for(int i=0;i<WeaponCount;++i) if(key=="weaponSkin"+std::to_string(i)) prefs.weaponSkins[i]=(int)std::clamp(value,0.0f,(float)(WeaponSkinCount-1));
+        }
         else for (int i = 0; i < ActionCount; ++i) if (key == "key" + std::to_string(i) && value >= 0 && value <= 512 && ValidKey((int)value)) prefs.keys[i] = (int)value;
     }
 }
@@ -38,6 +41,7 @@ bool Save() {
     out << "master " << prefs.master << "\nmusic " << prefs.music << "\nsfx " << prefs.sfx << "\nvoice " << prefs.voice
         << "\neffects " << prefs.effects << "\nfps " << prefs.showFps << "\ndifficulty " << prefs.difficulty << '\n';
     for (int i = 0; i < ActionCount; ++i) out << "key" << i << ' ' << prefs.keys[i] << '\n';
+    for(int i=0;i<WeaponCount;++i) out << "weaponSkin" << i << ' ' << prefs.weaponSkins[i] << '\n';
     out.flush(); return out.good();
 }
 bool DownKey(Action a) { return !BlocksInput() && IsKeyDown(prefs.keys[a]); }
@@ -58,7 +62,7 @@ void Update() {
     if (binding >= 0) {
         int k = GetKeyPressed();
         if (k == KEY_ESCAPE) binding = -1;
-        else if (ValidKey(k) && k != KEY_ONE && k != KEY_TWO && k != KEY_THREE) {
+        else if (ValidKey(k) && k != KEY_ONE && k != KEY_TWO && k != KEY_THREE && k != KEY_FOUR && k != KEY_FIVE) {
             int old = prefs.keys[binding];
             for (int i = 0; i < ActionCount; ++i) if (prefs.keys[i] == k) prefs.keys[i] = old;
             prefs.keys[binding] = k; binding = -1;

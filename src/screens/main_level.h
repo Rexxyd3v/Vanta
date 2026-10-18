@@ -61,7 +61,18 @@ private:
     struct DamageNumber { Vector2 position; float amount; float life; };
     std::vector<DamageNumber> damageNumbers;
     void RegisterHit(Vector2 position, float damage);
-    void ProcessKill(uint32_t killer, uint32_t victim);
+    void ProcessKill(uint32_t killer, uint32_t victim,int weapon=0,int skin=0);
+    struct KillFeedEntry {
+        std::string killer,victim;
+        int weapon=0,skin=0,killerTeam=0,victimTeam=0;
+        bool localKill=false,localDeath=false;
+        float remaining=7.0f;
+    };
+    std::vector<KillFeedEntry> killFeed;
+    void AddKillFeed(const std::string& killer,const std::string& victim,int weapon,int skin,
+                     int killerTeam,int victimTeam,bool localKill,bool localDeath);
+    void UpdateKillFeed(float dt);
+    void DrawKillFeed();
     Offline::Setup offlineSetup;
     int offlineScores[3] = {0,0,0};
     bool offlineRoundOver = false;
@@ -100,7 +111,7 @@ private:
     void DrawFlags();
     void DrawWavingFlag(Vector2 feet,int team,float size,float phase,int direction=1,float poleHeight=136) const;
     void AnnounceFlag(const std::string& text,int team);
-    void RecordOfflineKill(Character* killer, Character* victim);
+    void RecordOfflineKill(Character* killer, Character* victim,int weapon=-1,int skin=0);
     bool OfflineEnemies(const Character* a, const Character* b) const;
     Character* NearestOfflineEnemy(Character* source) const;
     void UpdatePractice(float dt);
@@ -178,6 +189,7 @@ private:
 
     // Physics & collision helpers
     void  ResolveWorldCollision(Character* c);
+    void  ResolveWorldMovement(Character* c, Vector2 previous);
     void  ClampCharacterToWorld(Character* c);
     void  CheckCollisions();
     Character* GetNearestEnemy(Vector2 pos);

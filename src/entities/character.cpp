@@ -7,21 +7,6 @@
 #include <iostream>
 #include "../ui/weapon_skin_catalog.h"
 
-struct WeaponStats {
-    int maxAmmo;
-    float reloadTime;
-    float fireRate;
-    float bulletSpeed;
-    float bulletRange;
-    float damage;
-};
-
-static const WeaponStats WEAPONS[] = {
-    { 30, 1.5f, 0.15f, 1000.0f, 1200.0f, 12.0f }, // SMG (Weapon 1)      range: 500  -> 1200
-    { 6,  2.0f, 0.8f,  700.0f,  900.0f,  40.0f }, // Shotgun (Weapon 2)  range: 350  -> 900
-    { 12, 1.2f, 0.4f,  750.0f, 1800.0f, 20.0f }  // Pistol (Weapon 3)   range: 900  -> 1800
-};
-
 // Static combat audio flag — disabled during menu background simulation
 bool Character::combatAudioEnabled = true;
 // Static debug-draw flag — when true, every Character::DrawDebugCollision()
@@ -30,19 +15,21 @@ bool Character::combatAudioEnabled = true;
 bool Character::debugDrawCollision = false;
 
 static void PlayWeaponSound(int index) {
-    static Sound sounds[3] = { {0}, {0}, {0} };
-    static bool loaded[3] = { false, false, false };
+    static Sound sounds[WeaponCount] = { {0}, {0}, {0} };
+    static bool loaded[WeaponCount] = { false, false, false };
 
     // Respect the global combat audio flag (muted during menu background)
     if (!Character::IsCombatAudioEnabled()) return;
     
-    std::string paths[3] = {
+    std::string paths[WeaponCount] = {
         "assets/sounds/weapon1.mp3", // Weapon 1 (SMG)
         "assets/sounds/weapon3.mp3", // Weapon 2 (Shotgun)
-        "assets/sounds/weapon2.mp3"  // Weapon 3 (Pistol)
+        "assets/sounds/weapon2.mp3", // Pistol
+        "assets/sounds/weapon1.mp3", // Assault rifle
+        "assets/sounds/weapon2.mp3" // Sniper
     };
     
-    if (index >= 0 && index < 3) {
+    if (index >= 0 && index < WeaponCount) {
         if (!loaded[index]) {
             Wave wave = LoadWave(paths[index].c_str());
             if (IsWaveValid(wave)) {
@@ -83,8 +70,8 @@ Character::Character(Vector2 startPosition, const std::string& assetPath, float 
       dashTimer(0.0f), dashCooldown(0.0f), dashDirection{0.0f, 0.0f}, shieldTimer(0.0f), shieldCooldown(0.0f),
       reloadTimer(0.0f), lastHitTimer(0.0f), healthDisplay(100.0f), godMode(false), teamID(0) {
 
-    for (int i = 0; i < 3; ++i) {
-        ammo[i] = WEAPONS[i].maxAmmo;
+    for (int i = 0; i < WeaponCount; ++i) {
+        ammo[i] = Weapons[i].maxAmmo;
     }
 
     if (assetPath.find("Enemies/") != std::string::npos) {
@@ -94,36 +81,16 @@ Character::Character(Vector2 startPosition, const std::string& assetPath, float 
     aimTarget = { startPosition.x + 100.0f, startPosition.y };
     velocity  = { 0.0f, 0.0f };
     LoadAnimations(assetPath);
+    if(animations.count(CharState::IDLE)) feetOffset=animations[CharState::IDLE]->GroundFootOffset(scale);
 
     currentWeaponIndex = 0;
     weaponSkinId = weaponSkin;
     currentWeaponSkin = weaponSkin;
 
-    // Per-slot fallback:
-    // - slot 0 (SMG) uses weaponR1.png
-    // - slot 1 (Shotgun) uses weaponR2.png
-    // - slot 2 (Pistol) uses weaponR3.png
+    // Every weapon uses its own default model and independently selected material.
     weaponTextures.clear();
 
-    auto loadSlot = [&](int slot, int skinId) -> Texture2D {
-        std::string slotPath = GetWeaponSlotSkinPath(slot, skinId);
-        int fileNumber = (skinId == 0) ? GetWeaponRenderFileNumber(slot) : slot + 1;
-        std::string png = "weaponR" + std::to_string(fileNumber) + ".png";
-        return TextureManager::GetTexture(slotPath + png);
-    };
-
-    // Try selected skin first; if that specific slot texture is missing, fallback to default skin only for that slot.
-    Texture2D t0 = loadSlot(0, weaponSkinId);
-    if (t0.id == 0) t0 = loadSlot(0, 0);
-    weaponTextures.push_back(t0);
-
-    Texture2D t1 = loadSlot(1, weaponSkinId);
-    if (t1.id == 0) t1 = loadSlot(1, 0);
-    weaponTextures.push_back(t1);
-
-    Texture2D t2 = loadSlot(2, weaponSkinId);
-    if (t2.id == 0) t2 = loadSlot(2, 0);
-    weaponTextures.push_back(t2);
+    for(int slot=0;slot<WeaponCount;++slot) weaponTextures.push_back(LoadWeaponSlotTexture(slot,weaponSkinId));
 }
 
 Character::~Character() {
@@ -164,26 +131,7 @@ void Character::SetWeaponSkin(int weaponSkin) {
     weaponSkinId = weaponSkin;
     currentWeaponSkin = weaponSkin;
 
-    auto loadSlot = [&](int slot, int skinId) -> Texture2D {
-        // Slot path selection uses per-slot folders (SMG/Shotgun/Pistol)
-        std::string slotPath = GetWeaponSlotSkinPath(slot, skinId);
-        int fileNumber = (skinId == 0) ? GetWeaponRenderFileNumber(slot) : slot + 1;
-        std::string png = "weaponR" + std::to_string(fileNumber) + ".png";
-        return TextureManager::GetTexture(slotPath + png);
-    };
-
-    // Per-slot fallback only (no global "any missing => default all").
-    Texture2D t0 = loadSlot(0, weaponSkinId);
-    if (t0.id == 0) t0 = loadSlot(0, 0);
-    weaponTextures.push_back(t0);
-
-    Texture2D t1 = loadSlot(1, weaponSkinId);
-    if (t1.id == 0) t1 = loadSlot(1, 0);
-    weaponTextures.push_back(t1);
-
-    Texture2D t2 = loadSlot(2, weaponSkinId);
-    if (t2.id == 0) t2 = loadSlot(2, 0);
-    weaponTextures.push_back(t2);
+    for(int slot=0;slot<WeaponCount;++slot) weaponTextures.push_back(LoadWeaponSlotTexture(slot,weaponSkinId));
 
     // Reset to first weapon if the current weapon index is out of bounds
     if (currentWeaponIndex < 0 || currentWeaponIndex >= static_cast<int>(weaponTextures.size())) {
@@ -193,7 +141,7 @@ void Character::SetWeaponSkin(int weaponSkin) {
 
 void Character::TakeDamage(float amount) {
     if (IsDead() || !std::isfinite(amount) || amount <= 0.0f) return;
-    if (shieldTimer > 0.0f) return; // Shield absorbs all damage
+    if (shieldTimer > 0.0f) { shieldHitFlash = 0.22f; return; }
     health -= amount;
     lastHitTimer = 3.0f; // show health bar for 3 seconds when hit
     if (health <= 0) {
@@ -204,6 +152,7 @@ void Character::TakeDamage(float amount) {
             health = 1.0f;
         } else {
             health = 0;
+            dashTimer = shieldTimer = 0.0f; dashEchoes.clear();
             SetState(CharState::DEATH);
         }
     }
@@ -214,7 +163,7 @@ float Character::GetHealth() const { return health; }
 void Character::SwitchWeapon(int index) {
     if (index >= 0 && index < (int)weaponTextures.size()) {
         currentWeaponIndex = index;
-        shootCooldown = WEAPONS[index].fireRate;
+        shootCooldown = Weapons[index].fireRate;
         reloadTimer = 0.0f; // cancel ongoing reload
     }
 }
@@ -230,11 +179,13 @@ Vector2 Character::GetHandPosition() const {
 
 WeaponPose Character::GetWeaponPose(Vector2 target) const {
     Texture2D texture=weaponTextures.empty()?Texture2D{}:weaponTextures[std::clamp(currentWeaponIndex,0,(int)weaponTextures.size()-1)];
-    return AimWeapon(GetHandPosition(),target,faceDirection,scale*0.45f,GetWeaponGeometry(texture));
+    auto geometry=GetWeaponGeometry(texture,currentWeaponIndex);
+    return AimWeapon(GetHandPosition(),target,faceDirection,scale*0.45f*geometry.scale,geometry);
 }
 WeaponPose Character::GetWeaponPoseInDirection(Vector2 direction) const {
     Texture2D texture=weaponTextures.empty()?Texture2D{}:weaponTextures[std::clamp(currentWeaponIndex,0,(int)weaponTextures.size()-1)];
-    return PoseWeapon(GetHandPosition(),direction,faceDirection,scale*0.45f,GetWeaponGeometry(texture));
+    auto geometry=GetWeaponGeometry(texture,currentWeaponIndex);
+    return PoseWeapon(GetHandPosition(),direction,faceDirection,scale*0.45f*geometry.scale,geometry);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,42 +229,15 @@ Vector2 Character::GetCollisionSize() const {
 }
 
 Rectangle Character::GetCollisionBounds() const {
-    Vector2 size = GetCollisionSize();
-    float draw_y = position.y - jumpHeight;
-
-    // Anchor to the feet: bottom of the box sits at the bottom of the
-    // visible sprite. The sprite's bottom edge is draw_y + sh/2, so
-    // the box top is (draw_y + sh/2) - ch.
-    auto it = animations.find(currentState);
-    if (it == animations.end() || !it->second || !it->second->HasFrames()) {
-        // Fallback: a small box centered on the character.
-        return { position.x - size.x * 0.5f,
-                 draw_y     - size.y * 0.5f,
-                 size.x, size.y };
-    }
-    int   texH = it->second->FrameHeight();
-    float sh   = (float)texH * scale;
-    float top  = (draw_y + sh * 0.5f) - size.y;
-
-    return { position.x - size.x * 0.5f,
-             top,
-             size.x, size.y };
+    Vector2 size=GetCollisionSize();
+    // Horizontal movement uses the ground projection. Jump animation cannot move this footprint.
+    return {position.x-size.x*0.5f,position.y+feetOffset-size.y,size.x,size.y};
 }
 
 Character::Circle Character::GetFeetCircle() const {
-    Vector2 size = GetCollisionSize();
-    float draw_y = position.y - jumpHeight;
-    float sh = 0.0f;
-    auto it = animations.find(currentState);
-    if (it != animations.end() && it->second && it->second->HasFrames()) {
-        sh = (float)it->second->FrameHeight() * scale;
-    }
-    // Small circle at the feet — same size as half the AABB so the
-    // circle fits inside the rectangle.
-    float radius = size.x < size.y ? size.x * 0.5f : size.y * 0.5f;
-    // Sit the circle at the bottom-center of the AABB (the feet).
-    float feetY = (draw_y + sh * 0.5f) - radius;
-    return { { position.x, feetY }, radius };
+    Vector2 size=GetCollisionSize();
+    float radius=std::min(size.x,size.y)*0.5f;
+    return {{position.x,position.y+feetOffset-radius},radius};
 }
 
 // ---------------------------------------------------------------------------
@@ -387,9 +311,9 @@ bool Character::Shoot(Vector2 targetPos) {
             lastShotDirection = dir;
             aimTarget = targetPos;
 
-            float bSpeed = WEAPONS[currentWeaponIndex].bulletSpeed;
-            float bRange = WEAPONS[currentWeaponIndex].bulletRange;
-            float bDamage = WEAPONS[currentWeaponIndex].damage;
+            float bSpeed = Weapons[currentWeaponIndex].bulletSpeed;
+            float bRange = Weapons[currentWeaponIndex].bulletRange;
+            float bDamage = Weapons[currentWeaponIndex].damage;
 
             if (isMonster) {
                 projectiles.push_back(std::make_shared<Projectile>(projPos, dir, bSpeed, bRange, bDamage, RED, MAROON));
@@ -397,6 +321,7 @@ bool Character::Shoot(Vector2 targetPos) {
                 projectiles.push_back(std::make_shared<Projectile>(projPos, dir, bSpeed, bRange, bDamage));
             }
             justShot = true;
+            projectiles.back()->SetWeaponSource(currentWeaponIndex,weaponSkinId);
             muzzleFlashTimer = 0.08f; // Show muzzle flash
             PlayWeaponSound(currentWeaponIndex); // play gun sound
             return true;
@@ -417,11 +342,12 @@ void Character::ShootInDirection(Vector2 dir) {
     lastShotDirection=dir;
     aimTarget={pose.muzzle.x+dir.x*1000,pose.muzzle.y+dir.y*1000};
 
-    float bSpeed = WEAPONS[currentWeaponIndex].bulletSpeed;
-    float bRange = WEAPONS[currentWeaponIndex].bulletRange;
-    float bDamage = WEAPONS[currentWeaponIndex].damage;
+    float bSpeed = Weapons[currentWeaponIndex].bulletSpeed;
+    float bRange = Weapons[currentWeaponIndex].bulletRange;
+    float bDamage = Weapons[currentWeaponIndex].damage;
 
     projectiles.push_back(std::make_shared<Projectile>(projPos, dir, bSpeed, bRange, bDamage));
+    projectiles.back()->SetWeaponSource(currentWeaponIndex,weaponSkinId);
     muzzleFlashTimer = 0.08f; // Show muzzle flash
     PlayWeaponSound(currentWeaponIndex); // play gun sound for remote players
 }
@@ -431,16 +357,83 @@ void Character::Draw() {
     float alpha = GetDrawAlpha();
     Color tint = WHITE;
     tint.a = (unsigned char)(255.0f * alpha);
-    animations[currentState]->Draw({ position.x, draw_y }, faceDirection, scale, 0.0f, tint);
-    if (shieldTimer > 0.0f) {
-        // Draw a glowing shield bubble centered on the character
-        Color shieldBlue = SKYBLUE;
-        shieldBlue.a = (unsigned char)(SKYBLUE.a * alpha);
-        Color shieldDarkBlue = BLUE;
-        shieldDarkBlue.a = (unsigned char)(BLUE.a * alpha);
-        DrawCircleLines((int)position.x, (int)draw_y + 30, 42.0f, shieldBlue);
-        DrawCircleLines((int)position.x, (int)draw_y + 30, 44.0f, shieldDarkBlue);
+    const Color energy{88, 231, 255, 255};
+    if (Settings::Get().effects && !IsDead()) {
+        for (const auto& echo : dashEchoes) {
+            float strength = echo.life / 0.20f;
+            auto it = animations.find(echo.state);
+            if (it != animations.end())
+                it->second->Draw({echo.position.x, echo.position.y-echo.height}, echo.facing, scale, 0,
+                                 Fade(energy, strength*0.32f*alpha));
+            Vector2 center{echo.position.x, echo.position.y-echo.height+44};
+            Vector2 normal{-dashDirection.y, dashDirection.x};
+            for (int lane=-1; lane<=1; ++lane) {
+                Vector2 tip{center.x+normal.x*lane*28, center.y+normal.y*lane*28};
+                DrawLineEx({tip.x-dashDirection.x*30,tip.y-dashDirection.y*30},tip,
+                           lane==0?2.5f:1.3f, Fade(energy,strength*0.65f*alpha));
+            }
+        }
     }
+    // Split each orbit at its depth plane so energy travels behind and in front of the body.
+    auto drawShieldOrbit = [&](bool front) {
+        if (shieldTimer <= 0 || IsDead()) return;
+        const bool effects=Settings::Get().effects;
+        Vector2 center{position.x,draw_y+44};
+        float unit=scale/0.15f;
+        float opening=std::clamp(shieldAge/0.16f,0.0f,1.0f);
+        float radius=77*unit*(0.65f+0.35f*opening);
+        float fade=std::min(1.0f,shieldTimer/0.22f)*alpha;
+        float impact=shieldHitFlash/0.22f;
+        for (int orbit=0;orbit<2;++orbit) {
+            float tilt=(orbit==0 ? -42.0f : 48.0f)*DEG2RAD;
+            float phase=shieldAge*(orbit==0 ? 390.0f : -335.0f)+orbit*180;
+            Color color=orbit==0 ? Color{74,232,255,255} : Color{142,153,255,255};
+            auto point=[&](float degrees,float expansion=1.0f) {
+                float a=degrees*DEG2RAD;
+                float x=cosf(a)*radius*expansion, y=sinf(a)*radius*0.43f*expansion;
+                return Vector2{center.x+x*cosf(tilt)-y*sinf(tilt),
+                               center.y+x*sinf(tilt)+y*cosf(tilt)};
+            };
+            // Three separated comet arcs on each orbit; luminous heads keep the rotation readable.
+            for (int arc=0;arc<3;++arc) {
+                float head=phase+arc*120;
+                for (int step=0;step<22;++step) {
+                    float a=head-(22-step)*3.3f;
+                    if ((sinf((a+1.65f)*DEG2RAD)>=0)!=front) continue;
+                    float strength=(step+1)/22.0f;
+                    float opacity=(0.12f+0.73f*strength)*fade*(front?1.0f:0.38f);
+                    Vector2 from=point(a),to=point(a+3.3f);
+                    if (effects) DrawLineEx(from,to,(8+impact*5)*unit,
+                                           Fade(color,opacity*0.12f));
+                    DrawLineEx(from,to,(1+strength*2.8f+impact*2)*unit,Fade(color,opacity));
+                    if (effects && step>12) DrawLineEx(from,to,1.1f*unit,
+                                                       Fade(WHITE,strength*0.65f*opacity));
+                }
+                if ((sinf(head*DEG2RAD)>=0)==front) {
+                    Vector2 core=point(head);
+                    if (effects) DrawCircleGradient(core,10*unit,Fade(color,fade*0.5f),Fade(color,0));
+                    DrawCircleV(core,2.3f*unit,Fade(WHITE,fade*(front?1.0f:0.4f)));
+                }
+                if (effects) for (int spark=0;spark<3;++spark) {
+                    float a=head-15-spark*23;
+                    if ((sinf(a*DEG2RAD)>=0)!=front) continue;
+                    Vector2 pos=point(a,1.07f+0.035f*spark);
+                    DrawCircleV(pos,(1.5f-spark*0.3f)*unit,
+                                Fade(color,fade*(0.65f-spark*0.16f)*(front?1.0f:0.35f)));
+                }
+            }
+            // Energy ripples race outward on activation and whenever the shield absorbs a hit.
+            float wave=impact>0?1-impact:std::clamp(shieldAge/0.35f,0.0f,1.0f);
+            if (effects && wave<1) for(int step=0;step<72;++step) {
+                float a=step*5.0f;
+                if ((sinf((a+2.5f)*DEG2RAD)>=0)!=front) continue;
+                DrawLineEx(point(a,1+wave*0.30f),point(a+5,1+wave*0.30f),1.5f*unit,
+                           Fade(WHITE,(1-wave)*0.45f*fade));
+            }
+        }
+    };
+    drawShieldOrbit(false);
+    animations[currentState]->Draw({ position.x, draw_y }, faceDirection, scale, 0.0f, tint);
     // Update muzzle flash timer moved to Update()
 
     if (!isMonster && !IsDead()) {
@@ -455,16 +448,12 @@ void Character::Draw() {
         }
 
         if (!haveGun) {
-            std::string defSMG = GetWeaponSlotSkinPath(0, 0);
-            std::string defShotgun = GetWeaponSlotSkinPath(1, 0);
-            std::string defPistol = GetWeaponSlotSkinPath(2, 0);
-            std::string defPrefix = (currentWeaponIndex == 0) ? defSMG : (currentWeaponIndex == 1 ? defShotgun : defPistol);
-            currentTex = TextureManager::GetTexture(defPrefix + "weaponR" + std::to_string(GetWeaponRenderFileNumber(currentWeaponIndex)) + ".png");
+            currentTex=LoadWeaponSlotTexture(currentWeaponIndex,0);
             haveGun = (currentTex.id != 0);
         }
 
         if (haveGun && currentTex.id != 0) {
-            float weaponScale = scale * 0.45f;
+            float weaponScale = scale * 0.45f * GetWeaponGeometry(currentTex,currentWeaponIndex).scale;
             Vector2 hand = GetHandPosition();
 
             WeaponPose pose=GetWeaponPose(aimTarget);
@@ -477,9 +466,7 @@ void Character::Draw() {
                                   (float)currentTex.width  * weaponScale,
                                   (float)currentTex.height * weaponScale };
             Vector2 origin = pose.origin;
-            Color weaponTint = GetWeaponSlotSkinTint(currentWeaponIndex, weaponSkinId);
-            weaponTint.a = (unsigned char)(weaponTint.a * alpha);
-            DrawTexturePro(currentTex, srcRec, dstRec, origin, rotation, weaponTint);
+            DrawWeaponSkinTexture(currentTex,srcRec,dstRec,origin,rotation,currentWeaponIndex,weaponSkinId,alpha);
 
             if (muzzleFlashTimer > 0.0f) {
                 Vector2 start=pose.muzzle, dir=pose.direction, normal{-dir.y,dir.x};
@@ -496,6 +483,8 @@ void Character::Draw() {
             }
         }
     }
+
+    drawShieldOrbit(true);
 
     for (auto& proj : projectiles) {
         proj->Draw();
@@ -597,8 +586,10 @@ void Character::UpdatePhysics(float deltaTime) {
 }
 
 bool Character::ActivateDash(Vector2 direction) {
-    if (dashCooldown <= 0.0f && dashTimer <= 0.0f) {
-        dashTimer = 0.15f;
+    if (!IsDead() && dashCooldown <= 0.0f && dashTimer <= 0.0f) {
+        dashTimer = 0.22f;
+        dashEchoClock = 0.0f;
+        dashEchoes.clear();
         dashCooldown = 2.0f;
         float len = sqrtf(direction.x * direction.x + direction.y * direction.y);
         if (len > 0.01f) {
@@ -612,33 +603,46 @@ bool Character::ActivateDash(Vector2 direction) {
 }
 
 bool Character::ActivateShield() {
-    if (shieldCooldown <= 0.0f && shieldTimer <= 0.0f) {
+    if (!IsDead() && shieldCooldown <= 0.0f && shieldTimer <= 0.0f) {
         shieldTimer = 2.0f;
+        shieldAge = shieldHitFlash = 0.0f;
         shieldCooldown = 6.0f;
         return true;
     }
     return false;
 }
 
-void Character::UpdateSkills(float deltaTime) {
-    if (muzzleFlashTimer > 0.0f) muzzleFlashTimer -= deltaTime;
-
-    if (dashTimer > 0.0f) {
-        dashTimer -= deltaTime;
-        float dashSpeed = speed * 3.0f;
-        position.x += dashDirection.x * dashSpeed * deltaTime;
-        position.y += dashDirection.y * dashSpeed * deltaTime;
+void Character::UpdateSkills(float deltaTime, bool moveDash) {
+    if (!std::isfinite(deltaTime) || deltaTime <= 0) return;
+    muzzleFlashTimer = std::max(0.0f,muzzleFlashTimer-deltaTime);
+    for (auto& echo : dashEchoes) echo.life -= deltaTime;
+    dashEchoes.erase(std::remove_if(dashEchoes.begin(),dashEchoes.end(),
+        [](const DashEcho& echo) { return echo.life <= 0; }),dashEchoes.end());
+    if (dashTimer > 0.0f && !IsDead()) {
+        float travelTime=std::min(deltaTime,dashTimer);
+        dashEchoClock -= deltaTime;
+        if (dashEchoClock <= 0 && Settings::Get().effects) {
+            dashEchoes.push_back({position,jumpHeight,0.20f,faceDirection,currentState});
+            if (dashEchoes.size()>8) dashEchoes.erase(dashEchoes.begin());
+            dashEchoClock=0.025f;
+        }
+        if (moveDash) {
+            position.x += dashDirection.x * speed * 3.0f * travelTime;
+            position.y += dashDirection.y * speed * 3.0f * travelTime;
+        }
     }
-    if (dashCooldown > 0.0f) dashCooldown -= deltaTime;
-
-    if (shieldTimer > 0.0f) shieldTimer -= deltaTime;
-    if (shieldCooldown > 0.0f) shieldCooldown -= deltaTime;
+    dashTimer = std::max(0.0f,dashTimer-deltaTime);
+    dashCooldown = std::max(0.0f,dashCooldown-deltaTime);
+    if (shieldTimer>0) shieldAge += deltaTime;
+    shieldHitFlash = std::max(0.0f,shieldHitFlash-deltaTime);
+    shieldTimer = std::max(0.0f,shieldTimer-deltaTime);
+    shieldCooldown = std::max(0.0f,shieldCooldown-deltaTime);
 
     // Reloading timer tick
     if (reloadTimer > 0.0f) {
         reloadTimer -= deltaTime;
         if (reloadTimer <= 0.0f) {
-            ammo[currentWeaponIndex] = WEAPONS[currentWeaponIndex].maxAmmo;
+            ammo[currentWeaponIndex] = Weapons[currentWeaponIndex].maxAmmo;
         }
     }
 
@@ -660,7 +664,7 @@ int Character::GetAmmo() const {
 }
 
 int Character::GetMaxAmmo() const {
-    return WEAPONS[currentWeaponIndex].maxAmmo;
+    return Weapons[currentWeaponIndex].maxAmmo;
 }
 
 bool Character::IsReloading() const {
@@ -668,15 +672,15 @@ bool Character::IsReloading() const {
 }
 
 void Character::RefillAmmo() {
-    for (int i = 0; i < 3; ++i) ammo[i] = WEAPONS[i].maxAmmo;
+    for (int i = 0; i < WeaponCount; ++i) ammo[i] = Weapons[i].maxAmmo;
 }
 
 float Character::GetReloadProgress() const {
-    return IsReloading() ? 1.0f - reloadTimer / WEAPONS[currentWeaponIndex].reloadTime : 1.0f;
+    return IsReloading() ? 1.0f - reloadTimer / Weapons[currentWeaponIndex].reloadTime : 1.0f;
 }
 
 void Character::TriggerReload() {
-    if (reloadTimer <= 0.0f && ammo[currentWeaponIndex] < WEAPONS[currentWeaponIndex].maxAmmo) {
-        reloadTimer = WEAPONS[currentWeaponIndex].reloadTime;
+    if (reloadTimer <= 0.0f && ammo[currentWeaponIndex] < Weapons[currentWeaponIndex].maxAmmo) {
+        reloadTimer = Weapons[currentWeaponIndex].reloadTime;
     }
 }

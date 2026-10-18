@@ -78,7 +78,7 @@ public:
 
     std::string localUsername;
     int localSkinIndex;
-    // TODO: Should be per-slot array instead of single value to support per-weapon skin selection.
+    // Encodes independent skins for all weapon slots; remains one integer on the wire.
     int localWeaponSkin;
     int localKills;
     int localDeaths;

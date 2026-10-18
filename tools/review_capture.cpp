@@ -38,7 +38,7 @@ struct Mp4 {
     IMFSinkWriter* writer=nullptr; DWORD video=0,audio=0; Wave music{};
     struct Voice { int weapon; long long start; float gain; };
     Wave shots[3]{}; std::vector<Voice> voices;
-    void shot(int weapon,int frame,float gain) { if(frame>=0) voices.push_back({weapon,(long long)frame*(44100/FPS),gain}); }
+    void shot(int weapon,int frame,float gain) { if(frame>=0) voices.push_back({weapon==3?0:weapon==4?2:weapon,(long long)frame*(44100/FPS),gain}); }
     Mp4(const wchar_t* path) {
         hr(CoInitializeEx(nullptr,COINIT_MULTITHREADED)); hr(MFStartup(MF_VERSION));
         IMFAttributes* attributes=nullptr; hr(MFCreateAttributes(&attributes,2));

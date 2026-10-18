@@ -3,7 +3,7 @@
 #include <cmath>
 #include <unordered_map>
 
-WeaponGeometry GetWeaponGeometry(Texture2D texture) {
+WeaponGeometry GetWeaponGeometry(Texture2D texture,int slot) {
     static std::unordered_map<unsigned int,WeaponGeometry> cache;
     auto found=cache.find(texture.id); if (found!=cache.end()) return found->second;
     float width=texture.width>0?(float)texture.width:2048, height=texture.height>0?(float)texture.height:2048;
@@ -17,6 +17,16 @@ WeaponGeometry GetWeaponGeometry(Texture2D texture) {
             for (int x=image.width-1;x>=0 && right<0;--x) for (int y=0;y<image.height;++y)
                 if (pixels[y*image.width+x].a>64) { right=x; break; }
             if (right>=0) {
+                int left=right,top=image.height-1,bottom=0;
+                for(int y=0;y<image.height;++y) for(int x=0;x<=right;++x) if(pixels[y*image.width+x].a>64) {
+                    left=std::min(left,x); top=std::min(top,y); bottom=std::max(bottom,y);
+                }
+                geometry.bounds={(float)left,(float)top,(float)(right-left+1),(float)(bottom-top+1)};
+                const float visibleWidth[]={1000,1250,640,1100,1450};
+                const Vector2 grips[]={{0.34f,0.70f},{0.28f,0.75f},{0.22f,0.73f},{0.33f,0.65f},{0.27f,0.80f}};
+                int weapon=std::clamp(slot,0,4);
+                geometry.pivot={left+geometry.bounds.width*grips[weapon].x,top+geometry.bounds.height*grips[weapon].y};
+                geometry.scale=visibleWidth[weapon]/geometry.bounds.width;
                 float sum=0,count=0;
                 for (int x=std::max(0,right-3);x<=right;++x) for (int y=0;y<image.height;++y)
                     if (pixels[y*image.width+x].a>64) { sum+=y; ++count; }

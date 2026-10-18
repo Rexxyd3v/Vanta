@@ -35,6 +35,24 @@ MapRegistry::~MapRegistry() {
 // builder returned none), auto-generate a 3x3 grid that scales with the map.
 // This makes any new .tmx folder in assets/Maps/ work out-of-the-box.
 // ---------------------------------------------------------------------------
+// Tiled point objects keep custom spawn positions editable alongside the map.
+static void LoadTmxSpawnPoints(MapData& data) {
+    if (!data.tmxMap) return;
+    for (uint32_t i=0;i<data.tmxMap->layersLength;++i) {
+        const auto& layer=data.tmxMap->layers[i];
+        if (layer.type!=LAYER_TYPE_OBJECT_GROUP || !layer.name || std::strcmp(layer.name,"spawns")!=0) continue;
+        std::vector<MapSpawnPoint> points;
+        const auto& group=layer.exact.objectGroup;
+        for (uint32_t j=0;j<group.objectsLength;++j) {
+            const auto& object=group.objects[j];
+            if (object.type==OBJECT_TYPE_POINT && object.x>=0 && object.y>=0 &&
+                object.x<data.pixelWidth && object.y<data.pixelHeight)
+                points.push_back({{(float)object.x,(float)object.y}});
+        }
+        if (!points.empty()) data.scene.spawnPoints=std::move(points);
+    }
+}
+
 static void AutoFillSpawnPoints(MapData& mapData) {
     if (!mapData.scene.spawnPoints.empty()) return; // already provided
 
@@ -112,6 +130,7 @@ void MapRegistry::LoadAllMaps(const char* mapsRoot) {
             mapData.scene = MapSceneRegistry::GetInstance().Build(dirName);
 
             // Auto-fill spawn points for maps with no registered scene builder.
+            LoadTmxSpawnPoints(mapData);
             AutoFillSpawnPoints(mapData);
 
             TraceLog(LOG_INFO, "MapRegistry: Loaded map '%s' (%dx%d px, %dx%d tiles)",
@@ -178,6 +197,7 @@ void MapRegistry::LoadAllMaps(const char* mapsRoot) {
             mapData.scene = MapSceneRegistry::GetInstance().Build(dirName);
 
             // Auto-fill spawn points for maps with no registered scene builder.
+            LoadTmxSpawnPoints(mapData);
             AutoFillSpawnPoints(mapData);
 
             TraceLog(LOG_INFO, "MapRegistry: Loaded map '%s' (%dx%d px, %dx%d tiles)",

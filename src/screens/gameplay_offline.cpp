@@ -49,7 +49,9 @@ void GameplayScreen::StartOfflineRound() {
     }
     deadFor=0;
 }
-void GameplayScreen::RecordOfflineKill(Character* killer,Character* victim) {
+void GameplayScreen::RecordOfflineKill(Character* killer,Character* victim,int weapon,int skin) {
+    if(weapon<0) { weapon=killer->GetWeaponIndex(); skin=killer->GetWeaponSkin(); }
+    AddKillFeed(killer->GetName(),victim->GetName(),weapon,skin,killer->GetTeamID(),victim->GetTeamID(),killer==player,victim==player);
     victim->AddDeath();
     if (killer!=victim) {
         killer->AddKill();
@@ -70,6 +72,7 @@ void GameplayScreen::UpdatePractice(float dt) {
     const bool fighting=matchEndTimer<=0 && !offlineRoundOver;
     for (size_t botIndex=0;botIndex<bots.size();++botIndex) {
         auto& bot=bots[botIndex];
+        Vector2 previousBotPosition=bot->GetPosition();
         if (fighting && !bot->IsDead()) {
             Character* enemy=NearestOfflineEnemy(bot.get());
             bool objective=false; Vector2 destination{};
@@ -90,7 +93,7 @@ void GameplayScreen::UpdatePractice(float dt) {
             }
             else if (enemy) bot->UpdateAI(dt,enemy->GetPosition());
         }
-        bot->Update(dt); ResolveWorldCollision(bot.get()); ClampCharacterToWorld(bot.get());
+        bot->Update(dt); ResolveWorldMovement(bot.get(),previousBotPosition); ClampCharacterToWorld(bot.get());
         if (fighting && !Offline::RoundMode(offlineSetup.mode) && bot->ShouldRespawn()) {
             bot->ResetHealth(100); bot->ResetDeathTimer();
             bot->SetPosition(bot->GetTeamID()?GetTeamSpawnPoint(bot->GetTeamID()):offlineSetup.mode==Offline::Mode::FreeForAll?GetDeathmatchSpawnPoint((uint32_t)botIndex+1):GetFarSpawnPoint());
@@ -112,7 +115,7 @@ void GameplayScreen::UpdatePractice(float dt) {
                 if (shooter==player) RegisterHit(p,before-victim->GetHealth());
                 if (victim==player) { damageFlash=0.5f; damageSource=shooter->GetPosition(); }
             }
-            if (victim->IsDead()) RecordOfflineKill(shooter,victim);
+            if (victim->IsDead()) RecordOfflineKill(shooter,victim,bullet->GetWeaponIndex(),bullet->GetWeaponSkin());
             break;
         }
     }

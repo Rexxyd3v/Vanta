@@ -57,7 +57,7 @@ int main() {
 
     MapRegistry::GetInstance().LoadAllMaps();
     auto mapNames = MapRegistry::GetInstance().GetMapNames();
-    if (!mapNames.empty()) {
+    if (!MapRegistry::GetInstance().GetMap(NetworkManager::GetInstance().selectedMapName) && !mapNames.empty()) {
         NetworkManager::GetInstance().selectedMapName = mapNames.front();
     }
 
@@ -67,6 +67,7 @@ int main() {
     SetTextureFilter(target.texture, TEXTURE_FILTER_BILINEAR);
 
     Settings::Load();
+    NetworkManager::GetInstance().localWeaponSkin=PackWeaponSkins(Settings::Get().weaponSkins);
     enum class Screen { Intro, Menu, Online, Offline, Lobby, Gameplay };
     Screen screen = Screen::Intro;
     std::unique_ptr<IScreen> currentScreen = std::make_unique<FirstScreen>();

@@ -1,4 +1,5 @@
 #include "main_level.h"
+#include "../map_loader/map_effects.h"
 #include "../ui/game_settings.h"
 #include "../rules/match_rules.h"
 #include <cmath>
@@ -102,11 +103,11 @@ GameplayScreen::GameplayScreen(GameMode mode)
     if (currentTmxMap) {
         for (uint32_t i = 0; i < currentTmxMap->layersLength; i++) {
             TmxLayer& layer = currentTmxMap->layers[i];
-            if (layer.type == LAYER_TYPE_OBJECT_GROUP) {
+            if (layer.type == LAYER_TYPE_OBJECT_GROUP &&
+                ((layer.name && std::strcmp(layer.name,"collision")==0) ||
+                 (layer.classString && std::strcmp(layer.classString,"collision")==0))) {
                 allObjectGroups.push_back(layer.exact.objectGroup);
-                if (strcmp(layer.name, "collision") == 0) {
-                    wallsObjectGroup = layer.exact.objectGroup;
-                }
+                wallsObjectGroup=layer.exact.objectGroup;
             }
         }
     }
@@ -395,6 +396,18 @@ void GameplayScreen::ResolveWorldCollision(Character* c) {
 }
 
 
+void GameplayScreen::ResolveWorldMovement(Character* c,Vector2 previous) {
+    Vector2 target=c->GetPosition();
+    Vector2 delta{target.x-previous.x,target.y-previous.y};
+    int steps=std::max(1,(int)std::ceil(std::hypot(delta.x,delta.y)/6.0f));
+    c->SetPosition(previous);
+    for(int i=0;i<steps;++i) {
+        Vector2 p=c->GetPosition();
+        c->SetPosition({p.x+delta.x/steps,p.y+delta.y/steps});
+        ResolveWorldCollision(c);
+    }
+}
+
 void GameplayScreen::ClampCharacterToWorld(Character* c) {
     if (!c) return;
 
@@ -458,6 +471,8 @@ void GameplayScreen::CheckCollisions() {
                 dmgPkt.header.playerID = NetworkManager::GetInstance().GetLocalPlayerID();
                 dmgPkt.targetPlayerID = t->peerID;
                 dmgPkt.damageAmount   = playerProjs[i]->GetDamage();
+                dmgPkt.weaponIndex = playerProjs[i]->GetWeaponIndex();
+                dmgPkt.weaponSkin = playerProjs[i]->GetWeaponSkin();
                 NetworkManager::GetInstance().SendPacket(&dmgPkt, sizeof(dmgPkt), true);
                 RegisterHit(cc, playerProjs[i]->GetDamage());
                 playerProjs[i]->Deactivate();
@@ -471,6 +486,7 @@ void GameplayScreen::CheckCollisions() {
 
 bool GameplayScreen::Update(float deltaTime) {
     worldTime += deltaTime;
+    if(!isPaused) UpdateKillFeed(deltaTime);
     hitMarker = std::max(0.0f, hitMarker - deltaTime);
     damageFlash = std::max(0.0f, damageFlash - deltaTime);
     for (auto& n : damageNumbers) { n.life -= deltaTime; n.position.y -= deltaTime * 45; }
@@ -516,6 +532,7 @@ bool GameplayScreen::Update(float deltaTime) {
     // Set player aim target in world coordinates
     player->SetAimTarget(mouseWorld);
 
+    Vector2 previousPlayerPosition=player->GetPosition();
     // If paused, we still do collision resolution to avoid falling through the floor
     // but skip player input processing so they don't move/shoot.
     if (!isPaused && !Settings::BlocksInput() && matchEndTimer <= 0 && IsWindowFocused()) {
@@ -524,8 +541,8 @@ bool GameplayScreen::Update(float deltaTime) {
         }
     } else if (currentMode == GameMode::ONLINE) player->UpdateWithoutInput(deltaTime);
     
-    // Always resolve collision to keep physics stable
-    ResolveWorldCollision(player);
+    // Sweep the ground footprint through movement, including long dash frames.
+    ResolveWorldMovement(player,previousPlayerPosition);
     ClampCharacterToWorld(player);
 
 
@@ -535,8 +552,9 @@ bool GameplayScreen::Update(float deltaTime) {
         if (nearestEnemy) {
             player2->SetAimTarget(nearestEnemy->GetPosition());
         }
+        Vector2 previousPlayer2Position=player2->GetPosition();
         player2->Update(deltaTime);
-        ResolveWorldCollision(player2);
+        ResolveWorldMovement(player2,previousPlayer2Position);
         ClampCharacterToWorld(player2);
 
     }
@@ -564,6 +582,8 @@ bool GameplayScreen::Update(float deltaTime) {
             pkt.health        = player->GetHealth();
             pkt.jumpHeight    = player->GetJumpHeight();
             pkt.jumpVelocity  = player->GetJumpVelocity();
+            pkt.dashTimer = player->GetDashTimer();
+            pkt.shieldTimer = player->GetShieldTimer();
             std::strncpy(pkt.username, NetworkManager::GetInstance().localUsername.c_str(), sizeof(pkt.username) - 1);
             pkt.username[sizeof(pkt.username) - 1] = '\0';
             pkt.charSkin      = NetworkManager::GetInstance().localSkinIndex;
@@ -668,8 +688,18 @@ void GameplayScreen::Draw(RenderTexture2D target) {
             }
         }
         if (groundLayer) {
-            DrawTMXLayers(currentTmxMap, &camera, &viewport, groundLayer, 1, 0, 0, WHITE);
+            DrawMapLayerWithMaterial(currentTmxMap,&camera,&viewport,groundLayer);
         }
+
+        // Additional terrain layers stay under characters, bases and ability effects.
+        for (uint32_t i=0;i<currentTmxMap->layersLength;++i) {
+            const auto& layer=currentTmxMap->layers[i];
+            if (&layer!=groundLayer && layer.visible && (layer.type==LAYER_TYPE_TILE_LAYER || layer.type==LAYER_TYPE_OBJECT_GROUP) &&
+                IsMapGroundLayer(layer))
+                DrawMapLayerWithMaterial(currentTmxMap,&camera,&viewport,&layer);
+        }
+
+        DrawMapEffects(currentTmxMap,worldTime,viewport);
 
         DrawBases();
         DrawGrenadeScars();
@@ -699,6 +729,25 @@ void GameplayScreen::Draw(RenderTexture2D target) {
             renderables.push_back(it);
         }
 
+        // Each Tiled sprite object sorts at its authored ground edge, independently of its neighbors.
+        for(uint32_t i=0;i<currentTmxMap->layersLength;++i) {
+            const auto& layer=currentTmxMap->layers[i];
+            if(!layer.visible || layer.type!=LAYER_TYPE_OBJECT_GROUP || !layer.classString || std::strcmp(layer.classString,"decor")) continue;
+            const auto& group=layer.exact.objectGroup;
+            for(uint32_t j=0;j<group.objectsLength;++j) {
+                if(group.objects[j].type!=OBJECT_TYPE_TILE) continue;
+                TmxLayer item=layer;
+                item.exact.objectGroup.objects=&group.objects[j];
+                item.exact.objectGroup.objectsLength=1;
+                item.exact.objectGroup.drawOrder=OBJECT_GROUP_DRAW_ORDER_INDEX;
+                item.exact.objectGroup.ySortedObjects=nullptr;
+                float depth=(float)group.objects[j].y-28;
+                renderables.push_back({depth,[this,item,viewport](){
+                    DrawTMXLayers(currentTmxMap,&camera,&viewport,&item,1,0,0,WHITE);
+                }});
+            }
+        }
+
         // Foreground tile layers: every tile layer after the first (ground)
         bool pastGround = false;
         for (uint32_t li = 0; li < currentTmxMap->layersLength; li++) {
@@ -711,6 +760,8 @@ void GameplayScreen::Draw(RenderTexture2D target) {
                 pastGround = true; // this is the ground layer ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â already drawn
                 continue;
             }
+
+            if (IsMapGroundLayer(layer)) continue;
 
             // -----------------------------------------------------------------
             // COLUMN-BASED DEPTH SORT
@@ -1223,10 +1274,10 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
             // weapons to render with the wrong texture/hand pivot.
             int clampedWeaponIndex = pkt.currentWeaponIndex;
             if (clampedWeaponIndex < 0) clampedWeaponIndex = 0;
-            if (clampedWeaponIndex > 2) clampedWeaponIndex = 2;
+            if (clampedWeaponIndex >= WeaponCount) clampedWeaponIndex = WeaponCount-1;
 
             if (const auto* info = NetworkManager::GetInstance().FindPlayer(pkt.header.playerID)) rp->SetTeamID(NetworkManager::GetInstance().currentGameMode == OnlineGameMode::FREE_FOR_ALL ? 0 : info->teamID);
-            rp->ApplyNetworkUpdate(pkt.position, pkt.state, clampedWeaponIndex, pkt.faceDirection, pkt.health, pkt.jumpHeight, pkt.jumpVelocity, pkt.weaponSkin);
+            rp->ApplyNetworkUpdate(pkt.position, pkt.state, clampedWeaponIndex, pkt.faceDirection, pkt.health, pkt.jumpHeight, pkt.jumpVelocity, pkt.weaponSkin, pkt.dashTimer, pkt.shieldTimer);
 
         } else if (header.type == PacketType::PLAYER_SHOOT && ev.data.size() >= sizeof(PacketPlayerShoot)) {
             PacketPlayerShoot pkt;
@@ -1264,7 +1315,7 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
 
             // Is it us who was damaged?
             if (pkt.targetPlayerID == myPlayerID && !player->IsDead() && matchEndTimer <= 0 && !isSpectating) {
-                if (!std::isfinite(pkt.damageAmount) || pkt.damageAmount <= 0 || pkt.damageAmount > 40) continue;
+                if (!std::isfinite(pkt.damageAmount) || pkt.damageAmount <= 0 || pkt.damageAmount > Weapons[4].damage) continue;
                 float before = player->GetHealth();
                 player->TakeDamage(pkt.damageAmount);
                 if (player->GetHealth() < before) {
@@ -1272,13 +1323,14 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
                     if (auto* attacker = FindByPeerID(pkt.header.playerID)) damageSource = attacker->GetPosition();
                 }
                 if (player->IsDead()) {
-                    ProcessKill(pkt.header.playerID, myPlayerID);
+                    ProcessKill(pkt.header.playerID, myPlayerID,pkt.weaponIndex,pkt.weaponSkin);
                     // Notify killer
                     PacketPlayerKilled killPkt;
                     killPkt.header.type = PacketType::PLAYER_KILLED;
                     killPkt.header.playerID = myPlayerID;
                     killPkt.killerPlayerID = pkt.header.playerID;
                     killPkt.victimPlayerID = pkt.targetPlayerID;
+                    killPkt.weaponIndex=pkt.weaponIndex; killPkt.weaponSkin=pkt.weaponSkin;
                     NetworkManager::GetInstance().SendPacket(&killPkt, sizeof(killPkt), true);
 
                     // Elimination: enter spectator state.
@@ -1292,7 +1344,7 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
             PacketPlayerKilled pkt;
             std::memcpy(&pkt, ev.data.data(), sizeof(PacketPlayerKilled));
 
-            ProcessKill(pkt.killerPlayerID, pkt.victimPlayerID);
+            ProcessKill(pkt.killerPlayerID, pkt.victimPlayerID,pkt.weaponIndex,pkt.weaponSkin);
         } else if (header.type == PacketType::PLAYER_RESPAWN && ev.data.size() >= sizeof(PacketPlayerRespawn)) {
             PacketPlayerRespawn pkt;
             std::memcpy(&pkt, ev.data.data(), sizeof(PacketPlayerRespawn));

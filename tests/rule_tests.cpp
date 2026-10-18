@@ -1,10 +1,17 @@
 #include "../src/rules/match_rules.h"
 #include "../src/rules/grenade_rules.h"
 #include "../src/ui/offline_setup.h"
+#include "../src/entities/weapon_catalog.h"
 #include <cstdlib>
 #include <iostream>
 static void check(bool ok, const char* label) { if (!ok) { std::cerr << label << '\n'; std::exit(1); } }
 int main() {
+    std::array<int,WeaponCount> choices{1,2,3,0,2};
+    int encoded=PackWeaponSkins(choices);
+    for(int i=0;i<WeaponCount;++i) check(WeaponSkinSelection(encoded,i)==choices[i],"mixed per-gun selections survive encoding");
+    for(int i=0;i<WeaponCount;++i) check(WeaponSkinSelection(2,i)==2,"legacy shared skin ID remains compatible");
+    choices[3]=3; int changed=PackWeaponSkins(choices);
+    check(WeaponSkinSelection(changed,0)==1 && WeaponSkinSelection(changed,3)==3 && WeaponSkinSelection(changed,4)==2,"changing rifle skin leaves other guns unchanged");
     check(Rules::FriendlyFire(true, 1, 1), "teammate damage blocked");
     check(!Rules::FriendlyFire(false, 1, 1), "FFA permits combat");
     check(!Rules::FriendlyFire(true, 1, 2), "enemies take damage");

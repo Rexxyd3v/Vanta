@@ -1,3 +1,4 @@
+#include "../map_loader/map_effects.h"
 #include "menu_background.h"
 #include "../constants.h"
 #include "../utils/texture_manager.h"
@@ -106,72 +107,72 @@ MenuBackground::~MenuBackground() {
     UnloadRenderTexture(blurRT2);
 }
 
-void MenuBackground::InitWorld() {
-    auto mapNames = MapRegistry::GetInstance().GetMapNames();
-    std::string mapName = "Forest";
-    if (!mapNames.empty()) {
-        int randomIndex = GetRandomValue(0, (int)mapNames.size() - 1);
-        mapName = mapNames[randomIndex];
-    }
-    currentMapData = MapRegistry::GetInstance().GetMap(mapName);
-
-    std::string basePath = currentMapData ? currentMapData->folderPath : "assets/Maps/Forest/";
-    std::string bgName   = (currentMapData && !currentMapData->scene.bgTexture.empty()) ? currentMapData->scene.bgTexture : "background.png";
-
-    bgTex = TextureManager::GetTexture(basePath + bgName);
+Vector2 MenuBackground::WorldSize() const {
+    return currentMapData?Vector2{(float)currentMapData->pixelWidth,(float)currentMapData->pixelHeight}:
+                          Vector2{(float)WORLD_WIDTH,(float)WORLD_HEIGHT};
 }
-
-void MenuBackground::InitEntities(int localSkinIndex) {
-    (void)localSkinIndex; // Pure spectator: no local player skin needed
-
-    std::string charPath =
-        "assets/Free 2D Animated Vector Game Character Sprites/"
-        "Free 2D Animated Vector Game Character Sprites/"
-        "Full body animated characters/";
-
-    // 6 ranged bots + 4 monsters in tight clusters so the camera always
-    // sees active combat.  Clusters are placed across the world so the
-    // broadcast camera has interesting areas to cut between.
-    const char* rangedSkins[4] = {
-        "Char 1/with hands/", "Char 2/with hands/",
-        "Char 3/with hands/", "Char 4/with hands/"
-    };
-    const char* monsterSkins[4] = {
-        "Enemies/Enemy 1/", "Enemies/Enemy 2/",
-        "Enemies/Enemy 3/", "Enemies/Enemy 4/"
-    };
-
-    // Three combat clusters spread across the map
-    struct ClusterDef { Vector2 center; float radius; };
-    const ClusterDef clusters[] = {
-        { { 900.0f,   800.0f }, 280.0f },   // left cluster
-        { { 2000.0f, 1000.0f }, 300.0f },   // centre cluster
-        { { 3200.0f,  700.0f }, 280.0f },   // right cluster
-    };
-
-    // Assign 2 ranged bots to each cluster (indices 0-1, 2-3, 4-5)
-    for (int i = 0; i < 6; i++) {
-        const ClusterDef& cl = clusters[i / 2];
-        float angle = (float)(i % 2) * 3.14159f + GetRandomValue(0, 31) * 0.1f;
-        Vector2 pos = {
-            cl.center.x + cosf(angle) * cl.radius,
-            cl.center.y + sinf(angle) * cl.radius
-        };
-        BotEnemy* b = new BotEnemy(pos, charPath + rangedSkins[i % 4]);
-        b->SetName(rangedSkins[i % 4]);
-        bots.push_back(b);
+void MenuBackground::InitWorld() {
+    auto& registry=MapRegistry::GetInstance();
+    currentMapData=registry.GetMap(NetworkManager::GetInstance().selectedMapName);
+    if(!currentMapData) currentMapData=registry.GetMap("MagmaRift");
+    if(!currentMapData) currentMapData=registry.GetMapByIndex(0);
+    bgTex={};
+    if(currentMapData && !currentMapData->tmxMap)
+        bgTex=TextureManager::GetTexture(currentMapData->folderPath+currentMapData->scene.bgTexture);
+    Vector2 size=WorldSize();
+    fightFocus=camera.target={size.x*.48f,size.y*.49f};
+    cameraZoom=cameraZoomTarget=camera.zoom=.52f;
+}
+void MenuBackground::ResolveDemoCollision(Character* actor) {
+    if(!actor) return;
+    if(currentMapData && currentMapData->tmxMap) for(int pass=0;pass<4;++pass) {
+        const auto* map=currentMapData->tmxMap;
+        for(uint32_t i=0;i<map->layersLength;++i) {
+            const auto& layer=map->layers[i];
+            if(layer.type!=LAYER_TYPE_OBJECT_GROUP || !layer.name || std::string(layer.name)!="collision") continue;
+            const auto& group=layer.exact.objectGroup;
+            for(uint32_t j=0;j<group.objectsLength;++j) {
+                const auto& object=group.objects[j];
+                Rectangle obstacle{(float)object.x,(float)object.y,(float)object.width,(float)object.height};
+                if(object.type==OBJECT_TYPE_POLYGON) obstacle=object.aabb;
+                if(object.type!=OBJECT_TYPE_RECTANGLE && object.type!=OBJECT_TYPE_POLYGON) continue;
+                Rectangle feet=actor->GetCollisionBounds();
+                if(CheckCollisionRecs(feet,obstacle)) ResolveCollisionPush(actor,feet,obstacle);
+            }
+        }
     }
-    // One monster per cluster (3 clusters → 3 monsters) + an extra monster
-    for (int i = 0; i < 4; i++) {
-        const ClusterDef& cl = clusters[i % 3];
-        float angle = (float)i * 1.57f;
-        Vector2 pos = {
-            cl.center.x + cosf(angle) * cl.radius * 0.6f,
-            cl.center.y + sinf(angle) * cl.radius * 0.6f
-        };
-        BotEnemy* m = new BotEnemy(pos, charPath + monsterSkins[i]);
-        m->SetName(monsterSkins[i]);
-        bots.push_back(m);
+    Vector2 size=WorldSize(),p=actor->GetPosition();
+    p.x=fclamp(p.x,120,size.x-120);p.y=fclamp(p.y,120,size.y-actor->GetFeetOffset()-120);
+    actor->SetPosition(p);
+}
+void MenuBackground::PlaceSpaced(BotEnemy* actor,Vector2 desired) {
+    Vector2 best=desired;float bestGap=-1;
+    for(int attempt=0;attempt<30;++attempt) {
+        float angle=attempt*2.399963f,radius=attempt?90.0f+attempt*12:0;
+        actor->SetPosition({desired.x+std::cos(angle)*radius,desired.y+std::sin(angle)*radius});
+        ResolveDemoCollision(actor);
+        float gap=1e9f;
+        for(auto* other:bots) if(other!=actor && !other->IsDead()) {
+            Vector2 p=actor->GetPosition(),q=other->GetPosition();
+            gap=std::min(gap,std::hypot(p.x-q.x,p.y-q.y));
+        }
+        if(gap>bestGap) { bestGap=gap;best=actor->GetPosition(); }
+        if(gap>=380) break;
+    }
+    actor->SetPosition(best);
+}
+void MenuBackground::InitEntities(int localSkinIndex) {
+    (void)localSkinIndex;
+    const std::string path="assets/Free 2D Animated Vector Game Character Sprites/Free 2D Animated Vector Game Character Sprites/Full body animated characters/";
+    const Vector2 positions[]={{.33f,.40f},{.47f,.38f},{.64f,.41f},{.34f,.59f},{.48f,.59f},{.66f,.56f}};
+    const int weapons[]={0,3,1,2,3,4};
+    Vector2 size=WorldSize();
+    for(int i=0;i<6;++i) {
+        auto* fighter=new BotEnemy({positions[i].x*size.x,positions[i].y*size.y},path+"Char "+std::to_string(i%4+1)+"/with hands/");
+        fighter->SetName("Fighter "+std::to_string(i+1));
+        fighter->SetDifficulty(2);fighter->SwitchWeapon(weapons[i]);
+        PlaceSpaced(fighter,fighter->GetPosition());bots.push_back(fighter);
+        agents.push_back({fighter->GetPosition(),fighter->GetPosition(),.15f*i,.12f*i,3.0f+i*.8f});
     }
 }
 
@@ -183,7 +184,6 @@ Character* MenuBackground::GetNearestTargetForBot(BotEnemy* b) {
 
     for (auto other : bots) {
         if (other == b || other->IsDead()) continue;
-        if (b->IsMonster() && other->IsMonster()) continue; // monsters don't target monsters
         float dx = other->GetPosition().x - b->GetPosition().x;
         float dy = other->GetPosition().y - b->GetPosition().y;
         float dist = dx*dx + dy*dy;
@@ -196,182 +196,169 @@ Character* MenuBackground::GetNearestTargetForBot(BotEnemy* b) {
 }
 
 void MenuBackground::TickWorld(float deltaTime) {
-    // --- Bots: AI + Update ---
-    for (auto b : bots) {
-        Character* target = GetNearestTargetForBot(b);
-        if (target) {
-            b->UpdateAI(deltaTime, target->GetPosition());
-        } else {
-            // No live target: wander toward a random world position
-            Vector2 wander = {
-                (float)GetRandomValue(300, (int)WORLD_WIDTH  - 300),
-                (float)GetRandomValue(300, (int)WORLD_HEIGHT - 300)
-            };
-            b->UpdateAI(deltaTime, wander);
-        }
-        b->Update(deltaTime);
-
-        // Respawn dead bots quickly (2s) so the spectator always sees action
-        if (b->ShouldRespawn()) {
-            // Respawn near an existing living bot for immediate combat, but try to avoid spawning too close to the camera
-            Vector2 spawn = {
-                (float)GetRandomValue(200, (int)WORLD_WIDTH  - 200),
-                (float)GetRandomValue(200, (int)WORLD_HEIGHT - 200)
-            };
-            bool foundGoodSpawn = false;
-            for (auto other : bots) {
-                if (!other->IsDead() && other != b) {
-                    // Try up to 5 times to find a spawn point near this bot that is far from camera
-                    for (int attempt = 0; attempt < 5; attempt++) {
-                        float angle = (float)GetRandomValue(0, 628) / 100.0f;
-                        Vector2 candidate = {
-                            other->GetPosition().x + cosf(angle) * 350.0f,
-                            other->GetPosition().y + sinf(angle) * 350.0f
-                        };
-                        candidate.x = fclamp(candidate.x, 150.0f, WORLD_WIDTH  - 150.0f);
-                        candidate.y = fclamp(candidate.y, 150.0f, WORLD_HEIGHT - 150.0f);
-                        // Check distance to camera target (at least 400 units away)
-                        float dx = candidate.x - camera.target.x;
-                        float dy = candidate.y - camera.target.y;
-                        float distSq = dx*dx + dy*dy;
-                        if (distSq >= 400.0f * 400.0f) {
-                            spawn = candidate;
-                            foundGoodSpawn = true;
-                            break; // break out of attempt loop
-                        }
+    float dt=std::clamp(deltaTime,0.0f,.05f);
+    for(size_t i=0;i<bots.size();++i) {
+        auto* fighter=bots[i];auto& state=agents[i];
+        Vector2 previous=fighter->GetPosition();
+        if(!fighter->IsDead()) {
+            auto* target=GetNearestTargetForBot(fighter);
+            state.retarget-=dt;state.fire-=dt;state.skill-=dt;
+            if(state.retarget<=0) {
+                float phase=worldTime*.37f+i*1.7f;
+                state.destination={state.home.x+std::sin(phase)*210,state.home.y+std::cos(phase*.83f)*145};
+                state.retarget=1.8f+(i%3)*.5f;
+            }
+            Vector2 destination=state.destination;
+            for(const auto& grenade:ordnance) if(grenade.kind==1 && grenade.age>.9f && grenade.age<6.9f) {
+                Vector2 p=fighter->GetPosition();float dx=p.x-grenade.target.x,dy=p.y-grenade.target.y,d=std::hypot(dx,dy);
+                if(d<240 && d>1) { destination.x+=dx/d*220;destination.y+=dy/d*220; }
+            }
+            fighter->MoveToObjective(dt,destination);
+            if(target) {
+                Vector2 aim=target->GetPosition();aim.y+=45-target->GetJumpHeight();
+                fighter->SetAimTarget(aim);fighter->SetFaceDirection(aim.x>=fighter->GetPosition().x?1:-1);
+                if(fighter->GetAmmo()==0 && !fighter->IsReloading()) fighter->TriggerReload();
+                float range=std::hypot(aim.x-fighter->GetPosition().x,aim.y-fighter->GetPosition().y);
+                if(state.fire<=0 && range<1250) {
+                    aim.x+=std::sin(worldTime*1.7f+i)*13;
+                    if(fighter->Shoot(aim)) state.fire=std::max(.20f,Weapons[fighter->GetWeaponIndex()].fireRate)+.06f*(i%3);
+                }
+                if(state.skill<=0) {
+                    if(fighter->GetHealth()<45) fighter->ActivateShield();
+                    else {
+                        Vector2 difference{aim.x-fighter->GetPosition().x,aim.y-fighter->GetPosition().y};
+                        fighter->ActivateDash({-difference.y*(i%2?1.0f:-1.0f),difference.x*(i%2?1.0f:-1.0f)});
                     }
-                    if (foundGoodSpawn) {
-                        break; // break out of other loop
-                    }
-                    // If we didn't find a good spot for this bot, try the next bot
-                }
-            }
-            // If we found a good spawn, we use it; otherwise, we keep the initial random spawn.
-            b->ResetHealth(100.0f);
-            b->GetProjectiles().clear();
-            b->SetPosition(spawn);
-            b->ResetDeathTimer();
-            // Start fade-in effect for respawning bots in demo mode
-            b->SetSpawnFadeTimer(0.4f);
-        }
-    }
-
-    // --- Projectile collisions (bot-only; no player target) ---
-    for (auto shooter : bots) {
-        if (shooter->IsMonster()) continue;
-        for (auto& p : shooter->GetProjectiles()) {
-            if (!p->IsActive()) continue;
-            Vector2 pp = p->GetPosition();
-            for (auto t : bots) {
-                if (t == shooter || t->IsDead()) continue;
-                Vector2 cc = { t->GetPosition().x, t->GetPosition().y - t->GetJumpHeight() };
-                if (ProjectileHitsAABB(pp, cc)) {
-                    t->TakeDamage(p->GetDamage());
-                    p->Deactivate();
-                    break;
+                    state.skill=5.5f+i*.3f;
                 }
             }
         }
-    }
-
-    // --- Monster melee: contact damage on cooldown ---
-    for (auto m : bots) {
-        if (!m->IsMonster()) continue;
-        float minDist = 50.0f;
-        Character* nearestTarget = nullptr;
-        for (auto other : bots) {
-            if (other == m || other->IsDead() || other->IsMonster()) continue;
-            float dx = other->GetPosition().x - m->GetPosition().x;
-            float dy = other->GetPosition().y - m->GetPosition().y;
-            float d = sqrtf(dx*dx + dy*dy);
-            if (d < minDist) { minDist = d; nearestTarget = other; }
+        fighter->Update(dt);
+        Vector2 end=fighter->GetPosition(),delta{end.x-previous.x,end.y-previous.y};
+        int steps=std::max(1,(int)std::ceil(std::hypot(delta.x,delta.y)/6));
+        fighter->SetPosition(previous);
+        for(int step=0;step<steps;++step) {
+            Vector2 p=fighter->GetPosition();fighter->SetPosition({p.x+delta.x/steps,p.y+delta.y/steps});ResolveDemoCollision(fighter);
         }
-        if (nearestTarget && m->GetShootCooldown() <= 0.0f) {
-            nearestTarget->TakeDamage(10.0f);
-            m->SetShootCooldown(0.8f);
+        if(fighter->ShouldRespawn()) {
+            fighter->ResetHealth(100);PlaceSpaced(fighter,state.home);fighter->ResetDeathTimer();fighter->SetSpawnFadeTimer(.7f);
         }
     }
-
-    // --- Apply horizontal velocity + resolve world collisions ---
-    // UpdateAI sets velocity but does NOT move position (for demo mode).
-    // We apply the movement here, then immediately push characters out of walls.
-    auto resolveWorld = [&](Character* c) {
-        if (!c) return;
-        Rectangle cb = c->GetCollisionBounds();
-        if (currentMapData && currentMapData->tmxMap) {
-            for (uint32_t i = 0; i < currentMapData->tmxMap->layersLength; i++) {
-                TmxLayer& layer = currentMapData->tmxMap->layers[i];
-                if (layer.type == LAYER_TYPE_OBJECT_GROUP) {
-                    for (uint32_t j = 0; j < layer.exact.objectGroup.objectsLength; j++) {
-                        const TmxObject& obj = layer.exact.objectGroup.objects[j];
-                        if (obj.type == OBJECT_TYPE_RECTANGLE) {
-                            Rectangle objRect = { (float)obj.x, (float)obj.y - 32.0f, (float)obj.width, (float)obj.height };
-                            if (CheckCollisionRecs(cb, objRect)) {
-                                ResolveCollisionPush(c, cb, objRect);
-                                cb = c->GetCollisionBounds();
-                            }
-                        }
-                    }
-                }
+    // Maintain room between fighters instead of allowing close-range piles around one target.
+    for(int pass=0;pass<2;++pass) for(size_t i=0;i<bots.size();++i) for(size_t j=i+1;j<bots.size();++j) {
+        auto* a=bots[i];auto* b=bots[j];if(a->IsDead() || b->IsDead()) continue;
+        Vector2 p=a->GetPosition(),q=b->GetPosition();float dx=q.x-p.x,dy=q.y-p.y,d=std::hypot(dx,dy);
+        if(d<280) {
+            if(d<.01f){dx=1;dy=0;d=1;}
+            float push=(280-d)*.5f;
+            a->SetPosition({p.x-dx/d*push,p.y-dy/d*push});b->SetPosition({q.x+dx/d*push,q.y+dy/d*push});
+            ResolveDemoCollision(a);ResolveDemoCollision(b);
+        }
+    }
+    for(auto* shooter:bots) for(auto& bullet:shooter->GetProjectiles()) {
+        if(!bullet->IsActive()) continue;
+        for(auto* victim:bots) {
+            if(victim==shooter || victim->IsDead()) continue;
+            Vector2 p=victim->GetPosition();p.y-=victim->GetJumpHeight();
+            if(ProjectileHitsAABB(bullet->GetPosition(),p)) { victim->TakeDamage(bullet->GetDamage());bullet->Deactivate();break; }
+        }
+    }
+    ordnanceTimer-=dt;
+    if(ordnanceTimer<=0 && ordnance.size()<8) {
+        BotEnemy* shooter=nullptr;
+        for(size_t step=0;step<bots.size();++step) {
+            auto* candidate=bots[(ordnanceSequence+step)%bots.size()];
+            Vector2 p=candidate->GetPosition();
+            if(!candidate->IsDead() && std::hypot(p.x-camera.target.x,p.y-camera.target.y)<1150) { shooter=candidate;break; }
+        }
+        if(shooter) if(auto* target=GetNearestTargetForBot(shooter)) {
+            Vector2 p=target->GetPosition();p.y+=target->GetFeetOffset();
+            p.x+=std::sin(worldTime)*95;p.y+=std::cos(worldTime)*65;
+            ordnance.push_back({shooter->GetHandPosition(),p,0,ordnanceSequence%3==0?1:0,false});
+            ++ordnanceSequence;
+        }
+        ordnanceTimer=2.4f;
+    }
+    blastShake=std::max(0.0f,blastShake-dt*1.65f);
+    for(auto& grenade:ordnance) {
+        grenade.age+=dt;
+        if(grenade.kind==0 && grenade.age>=.9f && !grenade.exploded) {
+            grenade.exploded=true;
+            Vector2 screen=GetWorldToScreen2D(grenade.target,camera);
+            float distance=std::hypot(screen.x-VIRTUAL_WIDTH*.6f,screen.y-VIRTUAL_HEIGHT*.5f);
+            blastShake=std::max(blastShake,std::clamp(1.15f-distance/1400,.25f,1.0f));
+            for(auto* victim:bots) {
+                Vector2 p=victim->GetPosition();p.y+=victim->GetFeetOffset();
+                if(!victim->IsDead() && std::hypot(p.x-grenade.target.x,p.y-grenade.target.y)<190) victim->TakeDamage(35);
             }
         }
-        // Clamp inside world bounds
-        Vector2 p = c->GetPosition();
-        p.x = fclamp(p.x, 80.0f, (float)WORLD_WIDTH  - 80.0f);
-        p.y = fclamp(p.y, 80.0f, (float)WORLD_HEIGHT - 80.0f);
-        c->SetPosition(p);
-    };
-    for (auto b : bots) resolveWorld(b);
-
-    // --- Broadcast camera: smoothly follow the hottest fight ---
-    // Re-evaluate which fight to spectate every broadcastTimer seconds.
-    broadcastTimer -= deltaTime;
-    if (broadcastTimer <= 0.0f) {
-        // Find the pair of living bots with the smallest distance
-        // (they are actively in each other's faces — most interesting fight).
-        float   bestDist = 1e9f;
-        Vector2 bestMid  = fightFocus;
-        int     numLive  = 0;
-        for (int i = 0; i < (int)bots.size(); i++) {
-            if (bots[i]->IsDead()) continue;
-            numLive++;
-            for (int j = i + 1; j < (int)bots.size(); j++) {
-                if (bots[j]->IsDead()) continue;
-                float dx = bots[j]->GetPosition().x - bots[i]->GetPosition().x;
-                float dy = bots[j]->GetPosition().y - bots[i]->GetPosition().y;
-                float d  = dx*dx + dy*dy;
-                if (d < bestDist) {
-                    bestDist = d;
-                    bestMid  = {
-                        (bots[i]->GetPosition().x + bots[j]->GetPosition().x) * 0.5f,
-                        (bots[i]->GetPosition().y + bots[j]->GetPosition().y) * 0.5f
-                    };
-                }
-            }
-        }
-        if (numLive > 0) fightFocus = bestMid;
-        // Stay on the same fight for 2-4 seconds then re-evaluate
-        broadcastTimer = (float)GetRandomValue(20, 40) / 10.0f;
-
-        // Randomize a new cinematic zoom target: occasionally zoom in closer
-        cameraZoomTarget = (GetRandomValue(0, 1) == 0) ? 1.05f : 0.92f;
-        cameraZoomTimer  = broadcastTimer;
     }
+    ordnance.erase(std::remove_if(ordnance.begin(),ordnance.end(),[](const DemoGrenade& g){return g.age>(g.kind==1?7.5f:3.0f);}),ordnance.end());
+    TickCinematicCamera(dt);
+}
 
-    // Smooth camera pan toward the fight focus (slow lerp = cinematic feel)
-    camera.target.x += (fightFocus.x - camera.target.x) * 1.2f * deltaTime;
-    camera.target.y += (fightFocus.y - camera.target.y) * 1.2f * deltaTime;
+void MenuBackground::TickCinematicCamera(float dt) {
+    shotElapsed+=dt;
+    if(cameraSubject<0 || shotElapsed>=shotDuration || bots[cameraSubject]->IsDead()) {
+        previousCameraSubject=cameraSubject;
+        int start=(shotSequence*2+shotSequence/3)%(int)bots.size();
+        for(size_t i=0;i<bots.size();++i) {
+            int candidate=(start+i)%bots.size();
+            if(!bots[candidate]->IsDead() && candidate!=previousCameraSubject) { cameraSubject=candidate;break; }
+        }
+        if(cameraSubject<0) cameraSubject=0;
+        int style=shotSequence++%4;
+        shotElapsed=0;
+        shotDuration=style==0?5.2f:style==1?4.3f:style==2?4.8f:4.1f;
+        // Establishing pullback, fighter push-in, travelling duel, then reverse pullout.
+        const float from[]={.68f,1.02f,.82f,1.30f},to[]={.48f,1.42f,1.03f,.68f};
+        shotZoomStart=from[style];shotZoomEnd=to[style];
+        shotRollStart=style%2?1.5f:-1.6f;shotRollEnd=-shotRollStart*.7f;
+        shotPanStart=style%2?Vector2{-100,55}:Vector2{110,-65};
+        shotPanEnd={-shotPanStart.x*.7f,-shotPanStart.y*.7f};
+    }
+    float t=std::clamp(shotElapsed/shotDuration,0.0f,1.0f);
+    float ease=t*t*(3-2*t);
+    Vector2 subject=bots[cameraSubject]->GetPosition();subject.y+=35;
+    int style=(shotSequence-1)%4;
+    if(style==0 || style==2) {
+        if(auto* opponent=GetNearestTargetForBot(bots[cameraSubject])) {
+            Vector2 other=opponent->GetPosition();
+            subject.x=subject.x*.6f+other.x*.4f;
+            subject.y=subject.y*.6f+(other.y+35)*.4f;
+        }
+    }
+    // Frame a live grenade in the travelling shot, then follow its blast.
+    if(style==2 && !ordnance.empty()) {
+        const auto& grenade=ordnance.back();
+        if(grenade.age<1.6f) {
+            subject.x=subject.x*.45f+grenade.target.x*.55f;
+            subject.y=subject.y*.45f+grenade.target.y*.55f;
+        }
+    }
+    fightFocus={subject.x+shotPanStart.x+(shotPanEnd.x-shotPanStart.x)*ease,
+                subject.y+shotPanStart.y+(shotPanEnd.y-shotPanStart.y)*ease};
+    float follow=1-std::exp(-dt*2.2f);
+    camera.target.x+=(fightFocus.x-camera.target.x)*follow;
+    camera.target.y+=(fightFocus.y-camera.target.y)*follow;
+    cameraZoomTarget=shotZoomStart+(shotZoomEnd-shotZoomStart)*ease;
+    cameraZoom+=(cameraZoomTarget-cameraZoom)*(1-std::exp(-dt*3.0f));
+    camera.zoom=cameraZoom;
+    float roll=shotRollStart+(shotRollEnd-shotRollStart)*ease;
+    camera.rotation+=(roll-camera.rotation)*(1-std::exp(-dt*2.0f));
+    Vector2 size=WorldSize();
+    const float margin=55;
+    camera.target.x=fclamp(camera.target.x,camera.offset.x/camera.zoom+margin,size.x-(VIRTUAL_WIDTH-camera.offset.x)/camera.zoom-margin);
+    camera.target.y=fclamp(camera.target.y,camera.offset.y/camera.zoom+margin,size.y-(VIRTUAL_HEIGHT-camera.offset.y)/camera.zoom-margin);
+}
 
-    // Clamp using the zoom that will actually be rendered this frame.
-    cameraZoom += (cameraZoomTarget - cameraZoom) * 0.8f * deltaTime;
-    camera.zoom = cameraZoom;
-
-    // Clamp so the camera never shows outside the world
-    camera.target.x = fclamp(camera.target.x, camera.offset.x/camera.zoom,
-        WORLD_WIDTH-(VIRTUAL_WIDTH-camera.offset.x)/camera.zoom);
-    camera.target.y = fclamp(camera.target.y, camera.offset.y/camera.zoom,
-        WORLD_HEIGHT-(VIRTUAL_HEIGHT-camera.offset.y)/camera.zoom);
-
+Camera2D MenuBackground::RenderCamera() const {
+    Camera2D result=camera;
+    float shake=blastShake*blastShake;
+    result.target.x+=(std::sin(worldTime*91)+std::sin(worldTime*137)*.4f)*shake*17/camera.zoom;
+    result.target.y+=(std::cos(worldTime*77)+std::sin(worldTime*113)*.4f)*shake*12/camera.zoom;
+    result.rotation+=std::sin(worldTime*83)*shake*.65f;
+    return result;
 }
 
 void MenuBackground::Update(float deltaTime, float fadeInAlpha) {
@@ -383,6 +370,68 @@ void MenuBackground::Update(float deltaTime, float fadeInAlpha) {
     }
 }
 
+
+void MenuBackground::DrawOrdnance() const {
+    for(const auto& grenade:ordnance) {
+        Vector2 center=grenade.target;
+        if(grenade.age<.9f) {
+            float t=grenade.age/.9f;
+            Vector2 p{grenade.start.x+(center.x-grenade.start.x)*t,
+                      grenade.start.y+(center.y-grenade.start.y)*t-std::sin(t*PI)*95};
+            DrawEllipse((int)(grenade.start.x+(center.x-grenade.start.x)*t),
+                        (int)(grenade.start.y+(center.y-grenade.start.y)*t),10,4,Fade(BLACK,.25f));
+            DrawCircleV(p,7,{44,73,38,255});
+            DrawCircleLines((int)p.x,(int)p.y,7,{174,221,82,255});
+            DrawCircleV({p.x+3,p.y-7},2,{255,218,115,255});
+            continue;
+        }
+        float age=grenade.age-.9f;
+        if(grenade.kind==1) {
+            float envelope=std::min(1.0f,age/.7f)*std::min(1.0f,(6.6f-age)/1.4f);
+            float spread=55+130*(1-std::exp(-age*.8f));
+            for(int i=0;i<16;++i) {
+                float angle=i*2.399963f+age*.065f;
+                float distance=spread*(.22f+.055f*(i%12));
+                Vector2 puff{center.x+std::cos(angle)*distance+age*7,
+                             center.y+std::sin(angle)*distance*.65f-age*5};
+                float radius=62+age*5+(i%4)*9+std::sin(worldTime*1.2f+i)*7;
+                DrawCircleGradient(puff,radius,
+                                   Fade({81,126,56,255},envelope*.21f),Fade({45,70,40,255},0));
+            }
+            for(int i=0;i<9;++i) {
+                float angle=i*2.4f+age*.3f;
+                Vector2 mote{center.x+std::cos(angle)*spread*.65f+age*7,
+                             center.y+std::sin(angle)*spread*.4f-age*12};
+                DrawCircleV(mote,1.7f,Fade({169,218,87,255},envelope*.45f));
+            }
+        } else {
+            float fade=std::max(0.0f,1-age/2.1f);
+            DrawCircleGradient(center,115,Fade({35,23,17,255},fade*.65f),Fade(BLACK,0));
+            for(int i=0;i<9;++i) {
+                float angle=i*.698f;
+                Vector2 start{center.x+std::cos(angle)*18,center.y+std::sin(angle)*12};
+                Vector2 bend{center.x+std::cos(angle+.12f)*55,center.y+std::sin(angle+.12f)*38};
+                Vector2 end{center.x+std::cos(angle-.08f)*(90+i%3*16),center.y+std::sin(angle-.08f)*(62+i%3*10)};
+                DrawLineEx(start,bend,2,Fade({255,123,35,255},fade*.55f));
+                DrawLineEx(bend,end,1.5f,Fade({54,29,17,255},fade));
+            }
+            if(age<.75f) {
+                float burst=1-age/.75f;
+                DrawCircleGradient(center,80+age*180,
+                                   Fade({255,156,39,255},burst*.8f),Fade({255,64,15,255},0));
+                DrawRing(center,30+age*250,34+age*250,0,360,64,Fade({255,197,110,255},burst*.65f));
+                for(int i=0;i<20;++i) {
+                    float angle=i*2.399963f,speed=150+(i%5)*42;
+                    Vector2 p{center.x+std::cos(angle)*age*speed,center.y+std::sin(angle)*age*speed*.72f-age*55};
+                    Vector2 tail{p.x-std::cos(angle)*burst*20,p.y-std::sin(angle)*burst*14};
+                    DrawLineEx(tail,p,2+burst,Fade({255,201,108,255},burst));
+                }
+                if(age<.15f) DrawCircleGradient(center,70,
+                    Fade({255,246,207,255},1-age/.15f),Fade({255,180,55,255},0));
+            }
+        }
+    }
+}
 
 void MenuBackground::DrawScene() {
     BeginTextureMode(sceneRT);
@@ -449,6 +498,9 @@ void MenuBackground::DrawScene() {
         return;
     }
 
+    Camera2D steadyCamera=camera;
+    camera=RenderCamera();
+
     // --- Original live gameplay simulation ---
     // Sky: vertical gradient
     for (int strip = 0; strip < WORLD_HEIGHT; strip += 80) {
@@ -463,13 +515,14 @@ void MenuBackground::DrawScene() {
 
     // Render map background (TMX or tiled image)
     if (currentMapData && currentMapData->tmxMap) {
-        float viewW = VIRTUAL_WIDTH / camera.zoom;
-        float viewH = VIRTUAL_HEIGHT / camera.zoom;
-        Rectangle viewport = { camera.target.x - camera.offset.x/camera.zoom,
-                               camera.target.y - camera.offset.y/camera.zoom,
+        float viewW = VIRTUAL_WIDTH / camera.zoom+140;
+        float viewH = VIRTUAL_HEIGHT / camera.zoom+140;
+        Rectangle viewport = { camera.target.x - camera.offset.x/camera.zoom-70,
+                               camera.target.y - camera.offset.y/camera.zoom-70,
                                viewW,
                                viewH };
-        DrawTMX(currentMapData->tmxMap, &camera, &viewport, 0, 0, WHITE);
+        DrawMapWithMaterials(currentMapData->tmxMap,&camera,&viewport);
+        DrawMapEffects(currentMapData->tmxMap,worldTime,viewport);
     } else if (bgTex.id != 0 && bgTex.width > 0) {
         int cols = (int)(WORLD_WIDTH  / bgTex.width)  + 2;
         int rows = (int)(WORLD_HEIGHT / bgTex.height) + 2;
@@ -494,22 +547,14 @@ void MenuBackground::DrawScene() {
         it.draw = [b]() { b->Draw(); };
         items.push_back(it);
     }
-    // Projectiles
-    for (auto* b : bots) {
-        for (auto& p : b->GetProjectiles()) {
-            RenderItem it;
-            it.depthY = p->GetPosition().y;
-            it.draw = [&p]() { p->Draw(); };
-            items.push_back(it);
-        }
-    }
-
     std::sort(items.begin(), items.end(), [](const RenderItem& a, const RenderItem& b) {
         return a.depthY < b.depthY;
     });
     for (auto& it : items) it.draw();
+    DrawOrdnance();
 
     EndMode2D();
+    camera=steadyCamera;
     EndTextureMode();
 }
 

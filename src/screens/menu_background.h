@@ -32,6 +32,23 @@ private:
     bool useParallaxBackdrop = false;
 
     std::vector<BotEnemy*> bots;
+    struct DemoAgent { Vector2 home{},destination{}; float retarget=0,fire=0,skill=3; };
+    struct DemoGrenade { Vector2 start{},target{}; float age=0; int kind=0; bool exploded=false; };
+    std::vector<DemoAgent> agents;
+    std::vector<DemoGrenade> ordnance;
+    float ordnanceTimer=.3f;
+    int ordnanceSequence=0,shotSequence=0;
+    float blastShake=0;
+    int cameraSubject=-1, previousCameraSubject=-1;
+    float shotElapsed=0, shotDuration=4.5f;
+    float shotZoomStart=.52f, shotZoomEnd=.68f;
+    float shotRollStart=-1.2f, shotRollEnd=1.0f;
+    Vector2 shotPanStart{},shotPanEnd{};
+    Camera2D RenderCamera() const;
+    Vector2 WorldSize() const;
+    void ResolveDemoCollision(Character* actor);
+    void PlaceSpaced(BotEnemy* actor,Vector2 desired);
+    void DrawOrdnance() const;
 
     Texture2D bgTex;
 

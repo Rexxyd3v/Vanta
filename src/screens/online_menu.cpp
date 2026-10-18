@@ -45,7 +45,7 @@ OnlineMenuScreen::OnlineMenuScreen() :
 
     background = new MenuBackground(currentSkin, MenuBackground::BackdropStyle::CINEMATIC_BEACH);
     preview = new CharacterPreview();
-    skinPreview = new WeaponSkinPreview();
+    skinPreview = new WeaponSkinPreview(currentGunSkin);
 
     // Layout: left side for character/gun tabs, right side for setup
     shell = { 70.0f, 70.0f, 1160.0f, 540.0f };
@@ -355,29 +355,12 @@ void OnlineMenuScreen::Draw(RenderTexture2D target) {
             int clicked = skinPreview->DrawSelector(gunSelectorArea, menuFont, currentWeaponSkin, mouse);
             if (clicked != -1) {
                 // Save selected skin for this weapon slot to NetworkManager (for local player info sync)
-                NetworkManager::GetInstance().localWeaponSkin = currentWeaponSkin;
+                NetworkManager::GetInstance().localWeaponSkin = skinPreview->GetPackedSkins();
                 connectError = "";
             }
 
             // Draw Weapon Skin Label showing active weapon + active skin
-            std::string weaponName = "SMG";
-            if (slot == 1) weaponName = "SHOTGUN";
-            else if (slot == 2) weaponName = "PISTOL";
-
-            std::string skinLabel = weaponName + " SKIN: ";
-            if (currentWeaponSkin == 0) {
-                skinLabel += "DEFAULT";
-            } else if (slot == 0) {
-                if (currentWeaponSkin == 1) skinLabel += "NEON CAMO";
-                else if (currentWeaponSkin == 2) skinLabel += "MAGMA";
-                else if (currentWeaponSkin == 3) skinLabel += "CARBON FIBER";
-            } else if (slot == 1) {
-                if (currentWeaponSkin == 1) skinLabel += "CLASSIC WOOD";
-                else if (currentWeaponSkin == 2) skinLabel += "GOLDEN OAK";
-            } else if (slot == 2) {
-                if (currentWeaponSkin == 1) skinLabel += "SILVER ALLOY";
-                else if (currentWeaponSkin == 2) skinLabel += "NEON CYBER";
-            }
+            std::string skinLabel=std::string(WeaponShortName(slot))+" / "+WeaponSkinLabel(slot,currentWeaponSkin);
 
             Vector2 skinTextSize = MeasureTextEx(menuFont, skinLabel.c_str(), 14.0f, 1.0f);
             DrawTextEx(menuFont, skinLabel.c_str(),

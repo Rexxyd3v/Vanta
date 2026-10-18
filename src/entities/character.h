@@ -5,6 +5,7 @@
 #include "animation.h"
 #include "projectile.h"
 #include "weapon_geometry.h"
+#include "weapon_catalog.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -48,6 +49,7 @@ public:
         currentShootCooldown = 0.0f;
         reloadTimer = 0.0f;
         dashTimer = dashCooldown = shieldTimer = shieldCooldown = 0.0f;
+        dashEchoes.clear(); dashEchoClock = shieldAge = shieldHitFlash = 0.0f;
         floorHeight = 0.0f;
         projectiles.clear();
         RefillAmmo();
@@ -94,7 +96,7 @@ public:
     float GetShieldCooldown() const { return shieldCooldown; }
     bool ActivateDash(Vector2 direction);
     bool ActivateShield();
-    void UpdateSkills(float deltaTime);
+    void UpdateSkills(float deltaTime, bool moveDash = true);
 
     // Weapons and Reloading
     int GetAmmo() const;
@@ -117,13 +119,7 @@ public:
     // Uses the actual visual bottom edge of the sprite (position.y - jumpHeight + spriteHeight/2)
     // so the sorted order matches what the player actually sees.
     virtual float GetDepthY() const {
-        auto it = animations.find(currentState);
-        if (it != animations.end() && it->second && it->second->HasFrames()) {
-            float draw_y = position.y - jumpHeight;
-            float sh = (float)it->second->FrameHeight() * scale;
-            return draw_y + sh * 0.5f; // actual bottom edge of sprite = feet
-        }
-        return position.y - jumpHeight + feetOffset; // fallback
+        return position.y-jumpHeight+feetOffset;
     }
 
     // ------------------------------------------------------------------
@@ -175,6 +171,7 @@ public:
 
     // Getters for networking
     int       GetWeaponIndex()  const { return currentWeaponIndex; }
+    int GetWeaponSkin() const { return weaponSkinId; }
     CharState GetCurrentState() const { return currentState; }
     bool      DidShoot() { bool ret = justShot; justShot = false; return ret; }
     Vector2   GetHandPosition() const;
@@ -199,7 +196,12 @@ protected:
     Vector2    dashDirection;
     float      shieldTimer;
     float      shieldCooldown;
-    int        ammo[3];
+    struct DashEcho { Vector2 position; float height, life; int facing; CharState state; };
+    std::vector<DashEcho> dashEchoes;
+    float dashEchoClock = 0.0f;
+    float shieldAge = 0.0f;
+    float shieldHitFlash = 0.0f;
+    int        ammo[WeaponCount];
     float      reloadTimer;
     float      lastHitTimer;
     float      scale;

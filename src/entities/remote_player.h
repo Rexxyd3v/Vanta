@@ -13,7 +13,7 @@ public:
     ~RemotePlayer() override;
 
     // Called every frame with the latest data received from network
-    void ApplyNetworkUpdate(Vector2 pos, int state, int weaponIndex, int faceDir, float hp, float jumpH, float jumpV, int weaponSkin);
+    void ApplyNetworkUpdate(Vector2 pos, int state, int weaponIndex, int faceDir, float hp, float jumpH, float jumpV, int weaponSkin, float dash = 0, float shield = 0);
 
     // Public wrapper around the protected Character::SetWeaponSkin so external
     // code (e.g. GameplayScreen) can update a remote player's weapon skin.

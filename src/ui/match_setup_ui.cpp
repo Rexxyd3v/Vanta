@@ -1,3 +1,4 @@
+#include "../map_loader/map_effects.h"
 #include "match_setup_ui.h"
 #include "ui_theme.h"
 #include "../constants.h"
@@ -17,7 +18,7 @@ void MapPreview::Prepare(const std::string& name,int width,int height) {
         camera.zoom=std::max((float)width/map->pixelWidth,(float)height/map->pixelHeight);
         camera.target={map->pixelWidth*0.5f,map->pixelHeight*0.5f}; camera.offset={width*0.5f,height*0.5f};
         Rectangle viewport{0,0,(float)map->pixelWidth,(float)map->pixelHeight};
-        BeginMode2D(camera); DrawTMX(map->tmxMap,&camera,&viewport,0,0,WHITE); EndMode2D();
+        BeginMode2D(camera); DrawMapWithMaterials(map->tmxMap,&camera,&viewport); DrawMapEffects(map->tmxMap,0,viewport); EndMode2D();
     }
     EndTextureMode();
 }

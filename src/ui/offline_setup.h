@@ -12,7 +12,7 @@ struct Setup {
     int killLimit = 20;
     int roundLimit = 5;
     int timeLimit = 300;
-    std::string map;
+    std::string map="MagmaRift";
 };
 inline Setup& Get() { static Setup setup; return setup; }
 inline bool TeamMode(Mode mode) { return mode==Mode::TeamDeathmatch || mode==Mode::Elimination || mode==Mode::Deathmatch; }

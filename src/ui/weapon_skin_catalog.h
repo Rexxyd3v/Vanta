@@ -1,41 +1,18 @@
-#ifndef WEAPON_SKIN_CATALOG_H
-#define WEAPON_SKIN_CATALOG_H
-
+#pragma once
 #include <string>
 #include <vector>
+#include "../entities/weapon_catalog.h"
 #include "../utils/texture_manager.h"
-#include "ui_widgets.h" // for GalleryItem
+#include "ui_widgets.h"
 
-enum class WeaponSkinId {
-    Default = 0,
-    Locked1 = 1,
-    Locked2 = 2,
-    COUNT // keep last
-};
-
-// Returns the prefix path for weapon textures for this skin and weapon slot.
-std::string GetWeaponSlotSkinPath(int slot, int skinId);
-
-// Returns the tint color for the weapon-specific skin selection and slot.
-Color GetWeaponSlotSkinTint(int slot, int skinId);
-
-// Returns the prefix path for weapon textures for this skin.
-// For example, if returns "assets/WeaponSkins/Default/", then weapon textures are
-// <prefix>weaponR1.png, weaponR2.png, weaponR3.png.
-// Returns empty string for locked skins.
+enum class WeaponSkinId { Default=0, Neon=1, Magma=2, Carbon=3, COUNT=4 };
+std::string GetWeaponTexturePath(int slot,int selection);
+Texture2D LoadWeaponSlotTexture(int slot,int selection);
+const char* WeaponSkinLabel(int slot,int skin);
+void DrawWeaponSkinTexture(Texture2D texture,Rectangle source,Rectangle destination,Vector2 origin,float rotation,int slot,int selection,float alpha=1);
+// Shared texture-based loadout helpers.
+std::string GetWeaponSlotSkinPath(int slot,int selection);
+Color GetWeaponSlotSkinTint(int slot,int selection);
 const char* WeaponSkinPath(WeaponSkinId id);
-
-// Returns a tint color for the weapon-specific skin selection so the player can
-// see distinct visual variants even when only the shared default texture set exists.
 Color GetWeaponSkinTint(int skinId);
-
-// Returns a vector of GalleryItem for the select gallery.
 std::vector<Ui::GalleryItem> GetWeaponSkinGalleryItems();
-
-// Returns the correct weaponR<N>.png file number for a given weapon slot
-// (0 = SMG, 1 = Shotgun, 2 = Pistol). Exists because the Shotgun/Pistol
-// default sprite files were swapped at the asset level (weaponR2.png
-// contains pistol art, weaponR3.png contains shotgun art).
-int GetWeaponRenderFileNumber(int slot);
-
-#endif // WEAPON_SKIN_CATALOG_H

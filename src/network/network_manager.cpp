@@ -4,6 +4,7 @@
 #define NOGDI
 #define NOUSER
 #include "network_manager.h"
+#include "../entities/weapon_catalog.h"
 #include "../constants.h"
 #include <iostream>
 #include <cstring>
@@ -29,7 +30,7 @@ NetworkManager::NetworkManager()
       localKills(0),
       localDeaths(0),
       localTeamID(0), // 0 means not yet assigned (or none in FFA)
-      selectedMapName("Forest"),
+      selectedMapName("MagmaRift"),
       currentGameMode(OnlineGameMode::FREE_FOR_ALL),
       timeLimit(0),    // Default to Kill limit active
       killLimit(40),
@@ -571,7 +572,7 @@ void NetworkManager::Update() {
                         if (netEvent.data.size() < sizeof(PacketPlayerDamage)) { enet_packet_destroy(event.packet); break; }
                         auto* d = reinterpret_cast<PacketPlayerDamage*>(wire);
                         auto* shooter = FindPlayer(wire->playerID); auto* victim = FindPlayer(d->targetPlayerID);
-                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 40 ||
+                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 90 || d->weaponIndex<0 || d->weaponIndex>WeaponCount+1 ||
                             Rules::FriendlyFire(currentGameMode != OnlineGameMode::FREE_FOR_ALL, shooter->teamID, victim->teamID)) {
                             enet_packet_destroy(event.packet); break;
                         }
@@ -588,7 +589,7 @@ void NetworkManager::Update() {
                     if (wire->type == PacketType::PLAYER_KILLED) {
                         if (netEvent.data.size() < sizeof(PacketPlayerKilled)) { enet_packet_destroy(event.packet); break; }
                         auto* k = reinterpret_cast<PacketPlayerKilled*>(wire);
-                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID)) { enet_packet_destroy(event.packet); break; }
+                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID) || k->weaponIndex<0 || k->weaponIndex>WeaponCount+1) { enet_packet_destroy(event.packet); break; }
                     }
                     if (wire->type == PacketType::PLAYER_RESPAWN && matchActive && currentGameMode == OnlineGameMode::ELIMINATION) {
                         enet_packet_destroy(event.packet); break;
