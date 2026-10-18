@@ -6,9 +6,17 @@
 
 A 2D arena shooter by **R Gamestudio** — built with C++17, raylib, and ENet.
 
-[Gameplay](#gameplay) · [Game modes](#game-modes) · [Controls](#controls) · [Build & run](#build--run)
+[Download v1.0.0](https://github.com/Rexxyd3v/Vanta/releases/download/v1.0.0/VANTA-1.0.0-Setup.exe) · [Gameplay](#gameplay) · [Game modes](#game-modes) · [Controls](#controls) · [Build & run](#build--run)
 
 </div>
+
+## Download & play
+
+**[Download VANTA 1.0.0 for Windows](https://github.com/Rexxyd3v/Vanta/releases/download/v1.0.0/VANTA-1.0.0-Setup.exe)**
+
+Run `VANTA-1.0.0-Setup.exe`, install, and launch **VANTA** from the Start menu. The single installer includes the game, assets, maps, and runtime DLLs. No ZIP extraction or development tools are needed. A desktop shortcut is optional, and the default installation does not require administrator access.
+
+Requires **64-bit Windows 10/11** and **OpenGL 3.3-capable graphics**. See the [release page](https://github.com/Rexxyd3v/Vanta/releases/tag/v1.0.0) for checksums and release notes.
 
 ## Gameplay
 

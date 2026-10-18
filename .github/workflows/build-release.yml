@@ -1,173 +1,65 @@
-name: Build and Release
+name: Windows EXE Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v1.0.0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  build-windows:
+  release:
     runs-on: windows-latest
-
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup MSYS2
+      - uses: actions/checkout@v4
+      - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-raylib
             mingw-w64-ucrt-x86_64-enet
             mingw-w64-ucrt-x86_64-opus
-            mingw-w64-ucrt-x86_64-opusfile
-            mingw-w64-ucrt-x86_64-libvorbis
             mingw-w64-ucrt-x86_64-miniaudio
-
-      - name: Check dependencies
+      - name: Build release
         shell: msys2 {0}
         run: |
-          echo "=== GCC ==="
-          g++ --version
-
-          echo "=== Raylib ==="
-          pkg-config --modversion raylib
-
-          echo "=== ENet ==="
-          pkg-config --modversion libenet || pkg-config --modversion enet
-
-          echo "=== Opus ==="
-          pkg-config --modversion opus
-
-          echo "=== Miniaudio ==="
-          pkg-config --modversion miniaudio || true
-
-      - name: Build Rgamestudio
-        shell: msys2 {0}
-        run: |
-          mkdir -p bin
-
-          g++ \
-            -I. \
-            src/*.cpp \
-            src/screens/*.cpp \
-            src/utils/*.cpp \
-            src/map_loader/*.cpp \
-            src/map_loader/scenes/*.cpp \
-            src/entities/*.cpp \
-            src/network/*.cpp \
-            src/ui/*.cpp \
-            src/voice/*.cpp \
-            -std=c++17 \
-            -O2 \
-            -o bin/Rgamestudio.exe \
-            $(pkg-config --cflags raylib opus miniaudio) \
-            -I/ucrt64/include \
-            -lraylib \
-            -lenet \
-            -lopus \
-            -lopusfile \
-            -lvorbis \
-            -lvorbisfile \
-            -lminiaudio \
-            -lws2_32 \
-            -lwinmm \
-            -lgdi32 \
-            -lopengl32
-
-      - name: Test match rules
-        shell: msys2 {0}
-        run: |
-          g++ -std=c++17 tests/rule_tests.cpp -o bin/rule_tests.exe
-          bin/rule_tests.exe
-
-      - name: Verify EXE
-        shell: msys2 {0}
-        run: |
-          if [ ! -f bin/Rgamestudio.exe ]; then
-            echo "ERROR: Rgamestudio.exe was not created."
-            exit 1
-          fi
-
-          echo "Build successful!"
-          ls -lh bin/Rgamestudio.exe
-
-      - name: Prepare Release Package
-        shell: msys2 {0}
-        run: |
-          rm -rf release_package
-          mkdir -p release_package
-
-          cp bin/Rgamestudio.exe release_package/
-
-          if [ -d assets ]; then
-            cp -r assets release_package/
-          fi
-
-          echo "Collecting required DLLs..."
-
-          ldd bin/Rgamestudio.exe | grep '/ucrt64/bin' | awk '{print $3}' | while read dll; do
-            if [ -f "$dll" ]; then
-              cp "$dll" release_package/
-            fi
-          done
-
-          echo "Release package:"
-          find release_package -maxdepth 2 -type f
-
-      - name: Create Release ZIP
+          cmake -S . -B bin/release-build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build bin/release-build -j 4
+          ctest --test-dir bin/release-build -R '^match_rules$' --output-on-failure
+      - name: Package single EXE installer
+        shell: pwsh
+        run: ./tools/package_windows.ps1 -Version '1.0.0'
+      - name: Save installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VANTA-1.0.0-Windows
+          path: |
+            bin/release/1.0.0/VANTA-1.0.0-Setup.exe
+            bin/release/1.0.0/SHA256SUMS.txt
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $zip = "Rgamestudio-$tag-windows.zip"
-
-          if (Test-Path $zip) {
-            Remove-Item $zip -Force
+          gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create '${{ github.ref_name }}' --repo '${{ github.repository }}' --title 'VANTA 1.0.0' --notes-file packaging/RELEASE_NOTES.md --latest
+            if ($LASTEXITCODE -ne 0) { throw 'Release creation failed.' }
           }
-
-          Compress-Archive `
-            -Path "release_package\*" `
-            -DestinationPath $zip `
-            -CompressionLevel Optimal
-
-          Write-Host "Created $zip"
-          Get-Item $zip | Format-List Name,Length,FullName
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: "Rgamestudio ${{ github.ref_name }}"
-          body: |
-            # Rgamestudio ${{ github.ref_name }}
-
-            ## Download
-
-            Download the Windows ZIP below and extract it.
-
-            ## How to Play
-
-            1. Download `Rgamestudio-${{ github.ref_name }}-windows.zip`
-            2. Extract the ZIP.
-            3. Open the extracted folder.
-            4. Run `Rgamestudio.exe`.
-
-            ## Requirements
-
-            - Windows 10/11
-            - 64-bit Windows
-
-          files: |
-            Rgamestudio-${{ github.ref_name }}-windows.zip
-          draft: false
-          prerelease: false
-          fail_on_unmatched_files: true
-
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Preserve existing downloads when a locally tested release was already published.
+          $published = @(gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw 'Could not inspect release assets.' }
+          foreach ($file in @('bin/release/1.0.0/VANTA-1.0.0-Setup.exe', 'bin/release/1.0.0/SHA256SUMS.txt')) {
+            $name = Split-Path -Leaf $file
+            if ($published -contains $name) { Write-Host "Preserving existing $name"; continue }
+            gh release upload '${{ github.ref_name }}' $file --repo '${{ github.repository }}'
+            if ($LASTEXITCODE -ne 0) { throw "Release upload failed: $name" }
+          }
