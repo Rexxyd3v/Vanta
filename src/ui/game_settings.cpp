@@ -109,7 +109,7 @@ void Update() {
     if (Click({350, 435, 250, 34})) prefs.effects = !prefs.effects;
     if (Click({350, 480, 250, 34})) prefs.showFps = !prefs.showFps;
     if (Click({350, 525, 250, 34})) prefs.difficulty = (prefs.difficulty + 1) % 3;
-    for (int i = 0; i < ActionCount; ++i) if (Click({680, 161.0f + i * 30, 270, 27})) binding = i;
+    for (int i = 0; i < ActionCount; ++i) if (Click({680, 161.0f + i * 27, 270, 25})) binding = i;
     if (Click({680, 548, 270, 27})) { prefs = Preferences{}; status = "Defaults restored. Close to save."; }
 }
 void Draw() {
@@ -134,12 +134,12 @@ void Draw() {
     DrawText(prefs.showFps ? "FPS COUNTER      ON" : "FPS COUNTER      OFF", 350, 489, 16, RAYWHITE);
     const char* difficulty[] = {"EASY", "MEDIUM", "DIFFICULT"};
     DrawText(TextFormat("PRACTICE: %s", difficulty[prefs.difficulty]), 350, 534, 16, RAYWHITE);
-    const char* actions[] = {"Move up", "Move down", "Move left", "Move right", "Jump", "Dash", "Shield", "Reload", "Push to talk", "Grenade", "Smoke grenade", "Drop flag", "Flashbang"};
+    const char* actions[] = {"Move up", "Move down", "Move left", "Move right", "Jump", "Dash", "Shield", "Reload", "Push to talk", "Grenade", "Smoke grenade", "Interact / pickup", "Flashbang", "Special throw"};
     for (int i = 0; i < ActionCount; ++i) {
-        int y = 161 + i * 30;
-        DrawRectangle(680, y, 270, 27, binding == i ? Color{70, 55, 25, 255} : Color{24, 33, 47, 255});
-        DrawText(actions[i], 690, y + 9, 16, LIGHTGRAY);
-        DrawText(binding == i ? "..." : KeyLabel((Action)i), 867, y + 9, 14, UiTheme::AccentGold());
+        int y = 161 + i * 27;
+        DrawRectangle(680, y, 270, 25, binding == i ? Color{70, 55, 25, 255} : Color{24, 33, 47, 255});
+        DrawText(actions[i], 690, y + 6, 16, LIGHTGRAY);
+        DrawText(binding == i ? "..." : KeyLabel((Action)i), 867, y + 7, 14, UiTheme::AccentGold());
     }
     DrawText("RESTORE DEFAULTS", 717, 556, 14, LIGHTGRAY);
     DrawText(status.empty() ? "F10 SETTINGS   /   ESC SAVE & CLOSE" : status.c_str(), 350, 586, 12, LIGHTGRAY);

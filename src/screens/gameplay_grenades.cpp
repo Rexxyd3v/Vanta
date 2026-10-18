@@ -8,6 +8,7 @@
 #include "../entities/bag_catalog.h"
 #include <algorithm>
 #include <cmath>
+#include "../audio/combat_audio.h"
 
 namespace {
 constexpr Color PoisonGreen{154, 248, 67, 255};
@@ -29,6 +30,7 @@ bool GameplayScreen::ThrowGrenade(int kind) {
     if (length > 650) { target.x = start.x+dx/length*650; target.y = start.y+dy/length*650; }
     target.x = std::clamp(target.x, 0.0f, worldWidth); target.y = std::clamp(target.y, 0.0f, worldHeight);
     grenades.push_back({start, target, 0, kind, true, nm.GetLocalPlayerID(), player->GetTeamID()});
+    CombatAudio::Play(CombatAudio::Throw,start,.65f);
     grenadeCooldown[kind] = kind == 0 ? 8.0f : kind==1?12.0f:15.0f;
     if (currentMode == GameMode::ONLINE) {
         PacketPlayerGrenade p{}; p.header = {PacketType::PLAYER_GRENADE, nm.GetLocalPlayerID()};
@@ -48,7 +50,7 @@ void GameplayScreen::ApplyPoisonDamage(const GrenadeEffect& g, Character* victim
     victim->TakeDamage(GrenadeRules::PoisonDamage);
     if (victim->GetHealth() >= before) return;
     if (localVictim) { poisonExposure = 0.8f; damageSource = g.target; }
-    else if (g.local) RegisterHit(victim->GetPosition(),before-victim->GetHealth());
+    NoteDamage(currentMode==GameMode::PRACTICE || g.ownerID==nm.GetLocalPlayerID()?static_cast<Character*>(player):FindByPeerID(g.ownerID),victim,before-victim->GetHealth(),WeaponCount+g.kind);
     if (!victim->IsDead()) return;
     if (currentMode == GameMode::PRACTICE) {
         RecordOfflineKill(player,victim,WeaponCount+g.kind);
@@ -73,6 +75,7 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
     for (auto& g : grenades) {
         float before = g.age; g.age += dt;
         if (g.kind==1) {
+            if(before<GrenadeRules::Fuse && g.age>=GrenadeRules::Fuse)CombatAudio::Play(CombatAudio::Flame,g.target,.6f);
             if (matchEndTimer>0 || (currentMode==GameMode::ONLINE && isSpectating) || (currentMode==GameMode::PRACTICE && offlineRoundOver)) continue;
             float active=g.age-GrenadeRules::Fuse;
             if (active>=0 && active<GrenadeRules::SmokeDuration && !player->IsDead() &&
@@ -88,7 +91,9 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
             }
             continue;
         }
+        if(before<GrenadeRules::Fuse-.3f && g.age>=GrenadeRules::Fuse-.3f)CombatAudio::Play(CombatAudio::Warning,g.target,.4f);
         if (before>=GrenadeRules::Fuse || g.age<GrenadeRules::Fuse) continue;
+        CombatAudio::Play(g.kind==2?CombatAudio::Shock:CombatAudio::Blast,g.target,g.kind==2?.6f:1);
         if(g.kind==2) {
             if(matchEndTimer>0) continue;
             auto blind=[&](Character* actor) {
@@ -112,10 +117,10 @@ void GameplayScreen::UpdateGrenades(float dt, bool allowInput) {
                 if (Rules::FriendlyFire(nm.currentGameMode != OnlineGameMode::FREE_FOR_ALL, g.ownerTeam, victim->GetTeamID())) return;
                 PacketPlayerDamage d{}; d.header = {PacketType::PLAYER_DAMAGE, g.ownerID};
                 d.targetPlayerID = id; d.damageAmount = 40; d.weaponIndex=WeaponCount+g.kind; nm.SendPacket(&d, sizeof(d), true);
-                RegisterHit(victim->GetPosition(), 40);
+
             } else {
                 float hp = victim->GetHealth(); victim->TakeDamage(40);
-                if (victim->GetHealth() < hp) RegisterHit(victim->GetPosition(), hp-victim->GetHealth());
+                if(victim->GetHealth()<hp)NoteDamage(player,victim,hp-victim->GetHealth(),WeaponCount+g.kind);
                 if (victim->IsDead()) RecordOfflineKill(player,victim,WeaponCount+g.kind);
             }
         };

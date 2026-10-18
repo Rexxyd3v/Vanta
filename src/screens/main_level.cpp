@@ -1,4 +1,5 @@
 #include "main_level.h"
+#include "../audio/combat_audio.h"
 #include "../map_loader/map_effects.h"
 #include "../ui/game_settings.h"
 #include "../rules/match_rules.h"
@@ -127,21 +128,26 @@ GameplayScreen::GameplayScreen(GameMode mode)
             rp->SetTeamID(nm.currentGameMode == OnlineGameMode::FREE_FOR_ALL ? 0 : info.teamID);
             rp->username = info.username; rp->SetName(info.username);
         }
-        player->SetPosition(player->GetTeamID() ? GetTeamSpawnPoint(player->GetTeamID()) : GetDeathmatchSpawnPoint(nm.GetLocalPlayerID()));
+        player->SetPosition(player->GetTeamID() ? GetTeamSpawnPoint(player->GetTeamID()) : RandomArenaSpawn(player));
         ResetFlag(1); ResetFlag(2);
         if (nm.currentGameMode == OnlineGameMode::ELIMINATION && nm.IsHost()) BroadcastRoundStart(1);
     } else InitializeOffline();
 
     ApplyActiveBag(true);
+    InitializeBonuses();spawnGrace=2.0f;
+    int surface=currentMapData && currentMapData->name=="DesertOutpost"?1:currentMapData && currentMapData->name=="AbandonedFoundry"?2:0;
+    player->SetSurfaceStyle(surface);for(auto& bot:bots)bot->SetSurfaceStyle(surface);for(auto* remote:remotePlayers)remote->SetSurfaceStyle(surface);
 
     // Camera2D
     camera.target   = player->GetPosition();
+    CombatAudio::Listen(player->GetPosition());
     camera.offset   = {VIRTUAL_WIDTH / 2.0f, VIRTUAL_HEIGHT / 2.0f};
     camera.rotation = 0.0f;
     camera.zoom     = GAMEPLAY_CAMERA_ZOOM;
 }
 
 GameplayScreen::~GameplayScreen() {
+    CombatAudio::Shutdown();
     delete player;
     if (player2) delete player2;
     for (auto r : remotePlayers) delete r;
@@ -475,8 +481,9 @@ void GameplayScreen::CheckCollisions() {
                 dmgPkt.damageAmount   = playerProjs[i]->GetDamage();
                 dmgPkt.weaponIndex = playerProjs[i]->GetWeaponIndex();
                 dmgPkt.weaponSkin = playerProjs[i]->GetWeaponSkin();
+                dmgPkt.shotID = playerProjs[i]->GetShotID();
                 NetworkManager::GetInstance().SendPacket(&dmgPkt, sizeof(dmgPkt), true);
-                RegisterHit(cc, playerProjs[i]->GetDamage());
+
                 playerProjs[i]->Deactivate();
                 break;
             }
@@ -487,14 +494,19 @@ void GameplayScreen::CheckCollisions() {
 }
 
 bool GameplayScreen::Update(float deltaTime) {
+    CombatAudio::Listen(spectateTarget && player->IsDead()?spectateTarget->GetPosition():player->GetPosition());
+    if(matchEndTimer>0)resultsAge+=deltaTime;
+    killConfirm=std::max(0.0f,killConfirm-deltaTime);
+    for(auto& impact:impacts)impact.age+=deltaTime;
+    impacts.erase(std::remove_if(impacts.begin(),impacts.end(),[](const Impact& i){return i.age>.4f;}),impacts.end());
     worldTime += deltaTime;
-    if(!isPaused) UpdateKillFeed(deltaTime);
+    if(!isPaused){UpdateKillFeed(deltaTime);if(!Settings::BlocksInput())UpdateMedals(deltaTime);}
     hitMarker = std::max(0.0f, hitMarker - deltaTime);
     damageFlash = std::max(0.0f, damageFlash - deltaTime);
     for (auto& n : damageNumbers) { n.life -= deltaTime; n.position.y -= deltaTime * 45; }
     damageNumbers.erase(std::remove_if(damageNumbers.begin(), damageNumbers.end(), [](const DamageNumber& n) { return n.life <= 0; }), damageNumbers.end());
 
-    if (!Settings::BlocksInput() && IsKeyPressed(KEY_ESCAPE)) {
+    if (matchEndTimer<=0 && !Settings::BlocksInput() && IsKeyPressed(KEY_ESCAPE)) {
         if(bagMenuOpen) bagMenuOpen=false;else isPaused = !isPaused;
     }
 
@@ -594,6 +606,9 @@ bool GameplayScreen::Update(float deltaTime) {
             pkt.charSkin      = NetworkManager::GetInstance().localSkinIndex;
             pkt.weaponSkin    = NetworkManager::GetInstance().localWeaponSkin;
             pkt.melee=player->GetMeleeVariant();pkt.meleeSkin=player->GetMeleeSkin();pkt.utility=player->GetUtilityItem();
+            pkt.shots=player->GetCombatStats().shots;pkt.hitShots=player->GetCombatStats().hits;pkt.damageDealt=player->GetCombatStats().damage;pkt.reloading=player->IsReloading();pkt.reloadProgress=player->GetReloadProgress();
+            pkt.statusTime=player->GetSlowTime();pkt.statusFactor=player->GetSlowFactor();
+            pkt.bonus=player->GetBonusGun();pkt.bonusAmmo=player->GetBonusAmmo();pkt.bonusEquipped=player->BonusEquipped();
 
             NetworkManager::GetInstance().SendPacket(&pkt, sizeof(pkt), false);
         }
@@ -604,7 +619,7 @@ bool GameplayScreen::Update(float deltaTime) {
             shootPkt.header.playerID = NetworkManager::GetInstance().GetLocalPlayerID();
             shootPkt.aimDir        = player->GetLastShotDirection();
             shootPkt.weapon=player->GetWeaponIndex();shootPkt.skin=player->GetWeaponSkin();
-            shootPkt.melee=player->GetMeleeVariant();shootPkt.meleeSkin=player->GetMeleeSkin();
+            shootPkt.melee=player->GetMeleeVariant();shootPkt.meleeSkin=player->GetMeleeSkin();shootPkt.bonus=player->LastBonusShot();
             NetworkManager::GetInstance().SendPacket(&shootPkt, sizeof(shootPkt), true);
         }
 
@@ -615,7 +630,8 @@ bool GameplayScreen::Update(float deltaTime) {
     UpdateGrenades(deltaTime, !isPaused && !bagMenuOpen && !bagInputConsumed && !Settings::BlocksInput() && !isSpectating && matchEndTimer <= 0 && IsWindowFocused());
     if (currentMode == GameMode::ONLINE && !NetworkManager::GetInstance().IsConnected()) return false;
     if (currentMode == GameMode::PRACTICE) UpdatePractice(deltaTime);
-    else if (matchEndTimer <= 0 && !isSpectating) CheckCollisions();
+    else if(matchEndTimer<=0){UpdateBulletWorld();if(!isSpectating)CheckCollisions();}
+    UpdateBonuses(deltaTime);
     if (player->IsDead()) deadFor += deltaTime; else deadFor = 0;
     bool elimination = currentMode == GameMode::PRACTICE ? Offline::RoundMode(offlineSetup.mode) : NetworkManager::GetInstance().currentGameMode == OnlineGameMode::ELIMINATION;
     bool autoRespawn = currentMode == GameMode::ONLINE || offlineSetup.mode != Offline::Mode::Training;
@@ -623,13 +639,17 @@ bool GameplayScreen::Update(float deltaTime) {
 
     if (currentMode == GameMode::PRACTICE) UpdateOfflineFlow(deltaTime);
     else UpdateMatchFlow(deltaTime);
+    if(matchEndTimer>0){isPaused=false;bagMenuOpen=false;}
+    UpdateResultsControls();
     if (returnToLobby) return false;
+    UpdateSpectator(deltaTime);
 
-    Vector2 playerPos = player->GetPosition();
+    Vector2 playerPos = spectateTarget && player->IsDead() && deadFor>.8f?spectateTarget->GetPosition():player->GetPosition();
     camera.target.x += (playerPos.x - camera.target.x) * 5.0f * deltaTime;
     camera.target.y += (playerPos.y - camera.target.y) * 5.0f * deltaTime;
 
     camera.offset = {VIRTUAL_WIDTH / 2.0f, VIRTUAL_HEIGHT / 2.0f};
+    if(Settings::Get().effects && !player->IsDead() && matchEndTimer<=0){Vector2 kick=player->GetLastShotDirection();camera.offset.x-=kick.x*player->GetRecoil()*.7f;camera.offset.y-=kick.y*player->GetRecoil()*.7f;}
     if (Settings::Get().effects && damageFlash > 0 && !isPaused && !Settings::BlocksInput()) {
         camera.offset.x += std::sin(worldTime * 85) * damageFlash * 5;
         camera.offset.y += std::cos(worldTime * 93) * damageFlash * 5;
@@ -941,6 +961,8 @@ void GameplayScreen::Draw(RenderTexture2D target) {
     }
 
     DrawGrenades();
+    DrawBonuses();
+    DrawCombatEffects();
     if (IsFlagDeathmatch()) DrawFlags();
     EndMode2D();
 
@@ -948,6 +970,7 @@ void GameplayScreen::Draw(RenderTexture2D target) {
 
     DrawHud();
     DrawBagHud();
+    DrawBonusHud();
     if(player->GetFlashBlind()>0 && !player->IsDead()) {
         float amount=std::clamp(player->GetFlashBlind()/.75f,0.0f,1.0f);
         DrawRectangle(0,0,VIRTUAL_WIDTH,VIRTUAL_HEIGHT,Fade(Color{247,249,255,255},amount*.97f));
@@ -984,42 +1007,7 @@ void GameplayScreen::Draw(RenderTexture2D target) {
                    14.0f, 1.0f, RAYWHITE);
     }
 
-    // ---- Match-end banner ----
-    if (matchEndTimer > 0.0f) {
-        Font matchFont = GetFontDefault();
-        const char* matchLabel = "MATCH OVER";
-        Rectangle bar = { 80, VIRTUAL_HEIGHT * 0.5f - 60,
-                          (float)(VIRTUAL_WIDTH - 160), 120 };
-        DrawRectangleRec(bar, Fade(BLACK, 0.90f));
-        DrawRectangleLinesEx(bar, 3.0f, UiTheme::AccentGold());
-        Vector2 sz = MeasureTextEx(matchFont, matchLabel, 36.0f, 1.0f);
-        DrawTextEx(matchFont, matchLabel,
-                   { bar.x + bar.width * 0.5f - sz.x * 0.5f,
-                     bar.y + 18.0f },
-                   36.0f, 1.0f, UiTheme::AccentGold());
-        int finalGR = NetworkManager::GetInstance().teamScores[1];
-        int finalBL = NetworkManager::GetInstance().teamScores[2];
-        std::string finalStr;
-        if (currentMode == GameMode::PRACTICE) finalStr = offlineResult;
-        else if (NetworkManager::GetInstance().currentGameMode == OnlineGameMode::FREE_FOR_ALL) {
-            const auto* winner = matchWinner >= 0 ? NetworkManager::GetInstance().FindPlayer((uint32_t)matchWinner) : nullptr;
-            finalStr = winner ? winner->username + " wins" : "Draw";
-        } else finalStr = "Final  GR " + std::to_string(finalGR) + "  :  " + std::to_string(finalBL) + "  BL";
-        Vector2 fsz = MeasureTextEx(matchFont, finalStr.c_str(), 18.0f, 1.0f);
-        DrawTextEx(matchFont, finalStr.c_str(),
-                   { bar.x + bar.width * 0.5f - fsz.x * 0.5f,
-                     bar.y + 70.0f },
-                   18.0f, 1.0f, RAYWHITE);
-        std::string hint = "Returning to lobby...";
-        Vector2 hsz = MeasureTextEx(matchFont, hint.c_str(), 12.0f, 1.0f);
-        DrawTextEx(matchFont, hint.c_str(),
-                   { bar.x + bar.width * 0.5f - hsz.x * 0.5f,
-                     bar.y + bar.height - 22.0f },
-                   12.0f, 1.0f, UiTheme::TextMuted());
-    }
-
-    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Scoreboard (TAB) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
-    if (IsKeyDown(KEY_TAB) && !Settings::BlocksInput()) {
+    if (matchEndTimer<=0 && IsKeyDown(KEY_TAB) && !Settings::BlocksInput()) {
         Font sbFont = GetFontDefault();
 
         // Collect entries
@@ -1165,7 +1153,7 @@ void GameplayScreen::Draw(RenderTexture2D target) {
     }
 
     // Crosshair
-    if (!isPaused && !Settings::BlocksInput() && !player->IsDead()) {
+    if (matchEndTimer<=0 && !isPaused && !Settings::BlocksInput() && !player->IsDead()) {
         Texture2D crosshairTex = TextureManager::GetTexture(
             "assets/Free 2D Animated Vector Game Character Sprites/"
             "Free 2D Animated Vector Game Character Sprites/Extras/crosshair.png");
@@ -1192,10 +1180,14 @@ void GameplayScreen::Draw(RenderTexture2D target) {
         }
     }
 
-    if (hitMarker > 0 && !isPaused && !Settings::BlocksInput()) {
+    if ((hitMarker > 0 || killConfirm>0) && matchEndTimer<=0 && !player->IsDead() && !isPaused && !Settings::BlocksInput()) {
         Vector2 m = Ui::RemapMouseToVirtual();
-        for (int x : {-1, 1}) for (int y : {-1, 1}) DrawLineEx({m.x + x*6, m.y + y*6}, {m.x + x*13, m.y + y*13}, 2, UiTheme::AccentGold());
+        for (int x : {-1, 1}) for (int y : {-1, 1}) DrawLineEx({m.x + x*6, m.y + y*6}, {m.x + x*13, m.y + y*13}, killConfirm>0?3:2,killConfirm>0?Color{255,112,94,255}:UiTheme::AccentGold());
+        if(killConfirm>0){const char* label="ELIMINATION CONFIRMED";DrawText(label,(int)std::clamp(m.x-MeasureText(label,10)/2.0f,12.0f,1080.0f),(int)std::clamp(m.y+25,12.0f,655.0f),10,Fade(Color{255,145,118,255},std::min(1.0f,killConfirm*4)));}
     }
+    if(matchEndTimer<=0 && !isPaused && !Settings::BlocksInput())DrawMedals();
+    if(player->IsDead() && matchEndTimer<=0 && !isPaused)DrawDeathRecap();
+    if(matchEndTimer>0)DrawMatchResults();
     EndTextureMode();
 }
 
@@ -1225,6 +1217,7 @@ RemotePlayer* GameplayScreen::FindOrCreateRemotePlayer(uint32_t playerID, int ch
         weaponSkin
     );
     rp->peerID = playerID;
+    rp->SetSurfaceStyle(currentMapData && currentMapData->name=="DesertOutpost"?1:currentMapData && currentMapData->name=="AbandonedFoundry"?2:0);
     remotePlayers.push_back(rp);
     return rp;
 }
@@ -1240,6 +1233,7 @@ void GameplayScreen::RemoveRemotePlayer(uint32_t playerID) {
                 }
                 if (flag.previousCarrier==*it) flag.previousCarrier=nullptr;
             }
+            if(spectateTarget==*it)spectateTarget=nullptr;wasReloading.erase(*it);
             delete *it;
             remotePlayers.erase(it);
             return;
@@ -1273,6 +1267,13 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
 
 
 
+        if(header.type==PacketType::MATCH_RESTART && header.playerID==0 && !NetworkManager::GetInstance().IsHost() && matchEndTimer>0){RestartMatch(false);continue;}
+        if(header.type==PacketType::CAPTURE_CREDIT && header.playerID==0 && ev.data.size()==sizeof(PacketCaptureCredit)){
+            PacketCaptureCredit p{};std::memcpy(&p,ev.data.data(),sizeof(p));Character* actor=p.actor==myPlayerID?static_cast<Character*>(player):FindByPeerID(p.actor);if(actor)actor->SetCaptures(p.total);continue;
+        }
+        if(header.type==PacketType::DAMAGE_CONFIRM && ev.data.size()==sizeof(PacketDamageConfirm)){
+            PacketDamageConfirm p{};std::memcpy(&p,ev.data.data(),sizeof(p));AcceptDamageConfirm(p);continue;
+        }
         if (header.type == PacketType::PLAYER_UPDATE && ev.data.size() >= sizeof(PacketPlayerUpdate)) {
             PacketPlayerUpdate pkt;
             std::memcpy(&pkt, ev.data.data(), sizeof(PacketPlayerUpdate));
@@ -1291,7 +1292,13 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
 
             if (const auto* info = NetworkManager::GetInstance().FindPlayer(pkt.header.playerID)) rp->SetTeamID(NetworkManager::GetInstance().currentGameMode == OnlineGameMode::FREE_FOR_ALL ? 0 : info->teamID);
             rp->ApplyNetworkUpdate(pkt.position, pkt.state, clampedWeaponIndex, pkt.faceDirection, pkt.health, pkt.jumpHeight, pkt.jumpVelocity, pkt.weaponSkin, pkt.dashTimer, pkt.shieldTimer);
+            if(std::isfinite(pkt.damageDealt))rp->SetRemoteStats(pkt.shots,pkt.hitShots,pkt.damageDealt);
+            if(pkt.reloading && !wasReloading[rp])CombatAudio::Play(CombatAudio::Reload,pkt.position,.65f);
+            if(!pkt.reloading && wasReloading[rp])CombatAudio::Play(CombatAudio::Ready,pkt.position,.6f);wasReloading[rp]=pkt.reloading;
             rp->SetEquipment(pkt.melee,pkt.meleeSkin,pkt.utility);
+            if(IsFreeForAll() && std::isfinite(pkt.statusTime) && std::isfinite(pkt.statusFactor))rp->SetRemoteStatus(pkt.statusTime,pkt.statusFactor);
+            rp->SetRemoteBonus(IsFreeForAll()?pkt.bonus:-1,IsFreeForAll()?pkt.bonusAmmo:0,IsFreeForAll() && pkt.bonusEquipped);
+            if(std::isfinite(pkt.reloadProgress))rp->SetRemoteReload(pkt.reloading,pkt.reloadProgress);
 
         } else if (header.type == PacketType::PLAYER_SHOOT && ev.data.size() >= sizeof(PacketPlayerShoot)) {
             PacketPlayerShoot pkt;
@@ -1302,16 +1309,21 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
             rp->lastAimDir = pkt.aimDir; // store aim direction for rendering
             rp->SetRemoteWeaponSkin(pkt.skin);rp->SwitchWeapon(std::clamp(pkt.weapon,0,WeaponCount-1));
             rp->SetEquipment(pkt.melee,pkt.meleeSkin);
-            rp->ShootInDirection(pkt.aimDir);
+            if(IsFreeForAll() && pkt.bonus>=0 && pkt.bonus<3) {
+                rp->SetRemoteBonus(pkt.bonus,1,true);rp->SetAimTarget({rp->GetPosition().x+pkt.aimDir.x*1000,rp->GetPosition().y+pkt.aimDir.y*1000});
+                SpawnBonusShot(rp,pkt.bonus,pkt.aimDir,pkt.header.playerID,false);
+            }else rp->ShootInDirection(pkt.aimDir);
 
         } else if (header.type == PacketType::PLAYER_GRENADE && ev.data.size() >= sizeof(PacketPlayerGrenade)) {
             PacketPlayerGrenade p{}; std::memcpy(&p, ev.data.data(), sizeof(p));
-            if (p.kind > 2 || !std::isfinite(p.start.x) || !std::isfinite(p.start.y) ||
+            if (p.kind > 5 || !std::isfinite(p.start.x) || !std::isfinite(p.start.y) ||
                 !std::isfinite(p.target.x) || !std::isfinite(p.target.y) || grenades.size() >= 32) continue;
             float dx = p.target.x - p.start.x, dy = p.target.y - p.start.y;
             if (p.start.x < 0 || p.start.y < 0 || p.start.x > worldWidth || p.start.y > worldHeight || dx*dx + dy*dy > 651*651) continue;
             const auto* owner = NetworkManager::GetInstance().FindPlayer(p.header.playerID);
-            grenades.push_back({p.start, p.target, 0, p.kind, false, p.header.playerID, owner ? owner->teamID : 0});
+            CombatAudio::Play(CombatAudio::Throw,p.start,.65f);
+            if(p.kind>=3) bonusProjectiles.push_back({p.start,{(p.target.x-p.start.x)/.8f,(p.target.y-p.start.y)/.8f},0,(int)p.kind,p.header.playerID,false,FindByPeerID(p.header.playerID)});
+            else grenades.push_back({p.start, p.target, 0, p.kind, false, p.header.playerID, owner ? owner->teamID : 0});
         } else if (header.type == PacketType::PLAYER_DAMAGE && ev.data.size() >= sizeof(PacketPlayerDamage)) {
             PacketPlayerDamage pkt;
             std::memcpy(&pkt, ev.data.data(), sizeof(PacketPlayerDamage));
@@ -1335,8 +1347,7 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
                 float before = player->GetHealth();
                 player->TakeDamage(pkt.damageAmount);
                 if (player->GetHealth() < before) {
-                    damageFlash = 0.5f;
-                    if (auto* attacker = FindByPeerID(pkt.header.playerID)) damageSource = attacker->GetPosition();
+                    NoteDamage(pkt.header.playerID==myPlayerID?static_cast<Character*>(player):FindByPeerID(pkt.header.playerID),player,before-player->GetHealth(),pkt.weaponIndex,pkt.weaponSkin,pkt.shotID);
                 }
                 if (player->IsDead()) {
                     ProcessKill(pkt.header.playerID, myPlayerID,pkt.weaponIndex,pkt.weaponSkin);
@@ -1404,7 +1415,7 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
             roundBannerTimer   = 0.0f;
             isSpectating       = false;
             player->SetGodMode(false);
-            player->ResetHealth(100.0f);
+            player->ResetHealth(100.0f);lifeDamage.clear();deathKiller.clear();spectateTarget=nullptr;
             ResetGrenades();
             int onlineMode2 = (int)NetworkManager::GetInstance().currentGameMode;
             int tid = (onlineMode2 == (int)OnlineGameMode::FREE_FOR_ALL) ? 0
@@ -1414,6 +1425,7 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
                            worldHeight / 2.0f + GetRandomValue(-200, 200) }
                 : GetTeamSpawnPoint(tid));
             ApplyActiveBag(true);
+    InitializeBonuses();spawnGrace=2.0f;
         } else if (header.type == PacketType::ROUND_END && ev.data.size() >= sizeof(PacketRoundEnd)) {
             PacketRoundEnd pkt;
             std::memcpy(&pkt, ev.data.data(), sizeof(PacketRoundEnd));
@@ -1434,6 +1446,8 @@ void GameplayScreen::PollNetworkEvents(float deltaTime) {
             }
         } else if (header.type==PacketType::FLAG_INTERACT && ev.data.size()==sizeof(PacketHeader)) {
             if (NetworkManager::GetInstance().IsHost() && IsFlagDeathmatch()) flagInteractRequests.insert(ev.senderID);
+        } else if(header.type==PacketType::BONUS_CLAIM || header.type==PacketType::BONUS_STATE) {
+            HandleBonusPacket(ev.data.data(),ev.data.size());
         } else if (header.type == PacketType::RETURN_LOBBY) {
             returnToLobby = true;
         } else if (header.type == PacketType::PLAYER_DISCONNECT && ev.data.size() >= sizeof(PacketPlayerDisconnectHeader)) {
@@ -1521,7 +1535,7 @@ void GameplayScreen::BroadcastRoundStart(int roundNumber) {
     pkt.header.playerID = 0; // from host
     pkt.roundNumber     = roundNumber;
     NetworkManager::GetInstance().SendPacket(&pkt, sizeof(pkt), true);
-    roundElapsed = 0;
+    roundElapsed = 0;lifeDamage.clear();deathKiller.clear();spectateTarget=nullptr;
     eliminated.clear();
     currentRoundNumber = roundNumber;
     roundInProgress    = true;
@@ -1539,6 +1553,7 @@ void GameplayScreen::BroadcastRoundStart(int roundNumber) {
     int localTeam = NetworkManager::GetInstance().localTeamID;
     if (localTeam != 0) player->SetPosition(GetTeamSpawnPoint(localTeam));
     ApplyActiveBag(true);
+    InitializeBonuses();spawnGrace=2.0f;
 }
 
 void GameplayScreen::BroadcastRoundEnd(int winningTeamID, int grScore, int blScore) {

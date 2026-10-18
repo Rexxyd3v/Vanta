@@ -2,6 +2,7 @@
 #define PROJECTILE_H
 
 #include <raylib.h>
+#include <cstdint>
 
 class Projectile {
 public:
@@ -17,8 +18,13 @@ public:
     void SetWeaponSource(int slot,int skin) { weaponIndex=slot; weaponSkin=skin; }
     int GetWeaponIndex() const { return weaponIndex; }
     int GetWeaponSkin() const { return weaponSkin; }
+    void SetShotID(uint32_t id){shotID=id;}
+    uint32_t GetShotID()const{return shotID;}
+    Vector2 GetPreviousPosition()const{return previousPosition;}
 
 private:
+    uint32_t shotID=0;
+    Vector2 previousPosition{};
     int weaponIndex=0,weaponSkin=0;
     Vector2 position;
     Vector2 direction;

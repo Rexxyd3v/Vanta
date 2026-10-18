@@ -6,6 +6,7 @@
 #include "../entities/player.h"
 #include "../entities/remote_player.h"
 #include "../entities/bot_enemy.h"
+#include "../entities/combat_medals.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -29,6 +30,7 @@ struct RenderItem {
 };
 
 struct PacketFlagState;
+struct PacketDamageConfirm;
 class GameplayScreen : public IScreen {
 public:
     explicit GameplayScreen(GameMode mode);
@@ -73,6 +75,51 @@ private:
                      int killerTeam,int victimTeam,bool localKill,bool localDeath);
     void UpdateKillFeed(float dt);
     void DrawKillFeed();
+    struct RecapHit {std::string attacker;int weapon=0,skin=0,hits=0;float damage=0;};
+    std::vector<RecapHit> lifeDamage;
+    std::string deathKiller;int deathWeapon=0,deathSkin=0;
+    Character* spectateTarget=nullptr;
+    float killConfirm=0,resultsAge=0;int resultsScroll=0;
+    uint32_t combatEpoch=0;
+    uint32_t damageSerial=0;std::unordered_set<uint64_t> damageReceipts;
+    struct Impact {Vector2 position,normal;float age;int material;};
+    std::vector<Impact> impacts;
+    std::unordered_map<Character*,bool> wasReloading;
+    void NoteDamage(Character* attacker,Character* victim,float damage,int weapon,int skin=0,uint32_t shot=0);
+    bool AcceptDamageConfirm(const PacketDamageConfirm& packet);
+    void BeginDeath(Character* killer,int weapon,int skin);
+    std::vector<Character*> SpectatorCandidates()const;
+    void UpdateSpectator(float dt);
+    void UpdateBulletWorld();
+    void DrawCombatEffects();
+    void DrawDeathRecap();
+    void DrawMatchResults();
+    void UpdateResultsControls();
+    void RestartMatch(bool broadcast=true);
+    void LeaveResults();
+    void CreditCapture(Character* actor);
+    std::vector<Character*> RankedActors()const;
+    std::vector<Character*> VictoryActors()const;
+    void DrawVictorySquad();
+    void PrepareBotTactics(BotEnemy* bot);
+    bool BotSight(Vector2 a,Vector2 b)const;
+    enum class FlagBotRole {Runner,Escort,Defender,Interceptor,Flanker};
+    struct FlagBotPlan {FlagBotRole role=FlagBotRole::Flanker;Vector2 destination{},routeTarget{};std::vector<Vector2> route;float repath=0;};
+    std::unordered_map<BotEnemy*,FlagBotPlan> flagBotPlans;
+    BotEnemy* flagRunners[3]{};
+    std::vector<unsigned char> flagWalkGrid,flagGridLinks;
+    int flagGridWidth=0,flagGridHeight=0;
+    void PlanFlagBots();
+    Vector2 FlagBotWaypoint(BotEnemy* bot,float dt);
+    bool FlagRouteClear(Vector2 a,Vector2 b)const;
+    Vector2 FlagBotSpacing(BotEnemy* bot)const;
+    Medals::Tracker medalTracker;
+    struct MedalToast{Medals::Kind kind;float age=0;};
+    std::vector<MedalToast> medalQueue;
+    float medalClock=0;
+    void NoteMedalKill(uint64_t killer,uint64_t victim,uint64_t local,bool enemies);
+    void UpdateMedals(float dt);
+    void DrawMedals();
     Offline::Setup offlineSetup;
     int offlineScores[3] = {0,0,0};
     bool offlineRoundOver = false;
@@ -206,6 +253,25 @@ private:
     Vector2 GetFarSpawnPoint();
     int GetCharacterTeam(const Character* c) const;
     bool cinematicCapture = false;
+    bool IsFreeForAll() const;
+    Vector2 RandomArenaSpawn(Character* actor=nullptr);
+    bool ArenaClear(Vector2 anchor,float margin=0) const;
+    struct BonusNode {Vector2 position{};float cooldown=0;int kind=0;uint32_t serial=0,owner=UINT32_MAX;};
+    std::vector<BonusNode> bonusNodes;
+    struct BonusProjectile {Vector2 position{},velocity{};float age=0;int kind=0;uint32_t owner=0;bool local=true;Character* actor=nullptr;uint32_t shot=0;};
+    struct BonusBlast {Vector2 position{};float age=0;int kind=0;uint32_t owner=0;bool local=true;Character* actor=nullptr;uint32_t shot=0;};
+    std::vector<BonusProjectile> bonusProjectiles;
+    std::vector<BonusBlast> bonusBlasts;
+    float bonusClock=0,bonusNetTimer=0,bonusMessageTime=0,spawnGrace=0;
+    std::string bonusMessage;
+    int awaitingBonusNode=-1;
+    void InitializeBonuses();void UpdateBonuses(float dt);void DrawBonuses();void DrawBonusHud();
+    void SpawnBonusShot(Character* actor,int kind,Vector2 direction,uint32_t owner,bool local);
+    bool ThrowBonus(Character* actor,Vector2 target,uint32_t owner,bool local=true);
+    void ClaimBonus(int index,Character* actor,uint32_t owner);
+    void SendBonusState();void HandleBonusPacket(const void* bytes,size_t size);
+    void ApplyBonusHit(Character* shooter,Character* victim,float damage,int kind,uint32_t owner,uint32_t shot=0);
+
 };
 
 #endif

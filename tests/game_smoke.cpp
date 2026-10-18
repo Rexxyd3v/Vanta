@@ -11,6 +11,10 @@
 #include "ui/weapon_skin_preview.h"
 #include "ui/loadout_storage.h"
 #include "rules/grenade_rules.h"
+#include "audio/combat_audio.h"
+#include "ui/weapon_hands.h"
+#include "ui/weapon_reload.h"
+#include "ui/match_presentation.h"
 #include <filesystem>
 #include "ui/ui_theme.h"
 #include "map_loader/map_effects.h"
@@ -144,6 +148,55 @@ struct GameplayEffectsTestAccess {
     static bool RoundOver(const GameplayScreen& game) { return game.offlineRoundOver; }
     static bool MatchOver(const GameplayScreen& game) { return game.matchEndTimer>0; }
     static void Flow(GameplayScreen& game,float dt) { game.UpdateOfflineFlow(dt); }
+    static void RestartMatch(GameplayScreen& game){game.RestartMatch();}
+    static void LeaveResults(GameplayScreen& game){game.LeaveResults();}
+    static void NoteDamage(GameplayScreen& g,Character* a,Character* v,float amount,int weapon,uint32_t shot=0){g.NoteDamage(a,v,amount,weapon,0,shot);}
+    static void Spectate(GameplayScreen& g){g.UpdateSpectator(.1f);}
+    static Character* Watched(GameplayScreen& g){return g.spectateTarget;}
+    static int Choices(GameplayScreen& g){return (int)g.SpectatorCandidates().size();}
+    static int RecapEntries(GameplayScreen& g){return (int)g.lifeDamage.size();}
+    static float RecapDamage(GameplayScreen& g){float total=0;for(auto& hit:g.lifeDamage)total+=hit.damage;return total;}
+    static Character* Mvp(GameplayScreen& g){return g.RankedActors().front();}
+    static bool Receipt(GameplayScreen& g,const PacketDamageConfirm& p){return g.AcceptDamageConfirm(p);}
+    static void ResultAge(GameplayScreen& g,float age){g.resultsAge=age;}
+    static std::vector<Character*> Winners(GameplayScreen& g){return g.VictoryActors();}
+    static void Winner(GameplayScreen& g,int team){g.matchWinner=team;}
+    static bool BotHazards(GameplayScreen& g){auto* bot=g.bots.front().get();Vector2 p=bot->GetPosition();
+        g.bonusBlasts.push_back({p,1,5});g.PrepareBotTactics(bot);bot->UpdateAI(.02f,{p.x+500,p.y});bool fire=bot->IsEvading();g.bonusBlasts.clear();
+        g.grenades.push_back({p,p,.2f,0,true});g.PrepareBotTactics(bot);bot->UpdateAI(.02f,{p.x+500,p.y});bool grenade=bot->IsEvading();g.grenades.clear();return fire && grenade;
+    }
+    static void MedalKill(GameplayScreen& g,uint64_t killer,uint64_t victim,uint64_t local){g.NoteMedalKill(killer,victim,local,true);}
+    static int Medals(GameplayScreen& g){return (int)g.medalQueue.size();}
+    static Medals::Kind MedalKind(GameplayScreen& g){return g.medalQueue.front().kind;}
+    static void MedalTick(GameplayScreen& g,float dt){g.UpdateMedals(dt);}
+    static void DrawMedal(GameplayScreen& g){g.DrawMedals();}
+
+    static void Finish(GameplayScreen& g){g.matchEndTimer=6;g.offlineResult="GLOBAL RISK WINS";}
+    static void Capture(GameplayScreen& g,Character* c){g.CreditCapture(c);}
+    static bool BulletWall(GameplayScreen& g){
+        auto groups=g.allObjectGroups;g.allObjectGroups.clear();auto* p=g.player;p->ResetHealth(100);p->SwitchWeapon(0);Vector2 hand=p->GetHandPosition();
+        p->Shoot({hand.x+1000,hand.y});auto bullet=p->GetProjectiles().back();Vector2 from=bullet->GetPosition();
+        TmxObject wall{};wall.type=OBJECT_TYPE_RECTANGLE;wall.x=from.x+25;wall.y=from.y-30;wall.width=5;wall.height=60;
+        TmxObjectGroup group{};group.objects=&wall;group.objectsLength=1;g.allObjectGroups.push_back(group);bullet->Update(.1f);g.UpdateBulletWorld();
+        bool hit=!bullet->IsActive() && !g.impacts.empty();g.allObjectGroups=std::move(groups);return hit;
+    }
+    static void FlagPlan(GameplayScreen& g){g.PlanFlagBots();}
+    static int FlagRoles(GameplayScreen& g,int team,int role){int count=0;for(const auto& entry:g.flagBotPlans)if(!entry.first->IsDead() && entry.first->GetTeamID()==team && (int)entry.second.role==role)++count;return count;}
+    static bool SpreadPlans(GameplayScreen& g,int team){std::vector<Vector2> destinations;for(const auto& entry:g.flagBotPlans)if(entry.first->GetTeamID()==team && !entry.first->IsDead())destinations.push_back(entry.second.destination);
+        for(size_t i=0;i<destinations.size();++i)for(size_t j=i+1;j<destinations.size();++j)if(std::hypot(destinations[i].x-destinations[j].x,destinations[i].y-destinations[j].y)<110)return false;return true;}
+    static void AssignCarrier(GameplayScreen& g,int team,Character* actor){g.flags[team].carrier=actor;g.flags[team].dropped=false;g.flags[team].respawnTimer=0;}
+    static bool FlagDetour(GameplayScreen& g){
+        auto groups=g.allObjectGroups;g.allObjectGroups.clear();g.flagWalkGrid.clear();g.flagGridLinks.clear();
+        TmxObject wall{};wall.type=OBJECT_TYPE_RECTANGLE;wall.x=1400;wall.y=400;wall.width=96;wall.height=900;
+        TmxObjectGroup group{};group.objects=&wall;group.objectsLength=1;g.allObjectGroups.push_back(group);
+        auto* bot=g.bots.front().get();bot->SetPosition({1000,800});bot->ResetHealth(100);g.flagBotPlans[bot].destination={1850,800};
+        bool safe=true;float longest=0;for(int i=0;i<400;++i){g.PrepareBotTactics(bot);Vector2 before=bot->GetPosition();bot->MoveToObjective(.1f,g.FlagBotWaypoint(bot,.1f));bot->Update(.1f);g.ResolveWorldMovement(bot,before);
+            Vector2 now=bot->GetPosition();longest=std::max(longest,std::hypot(now.x-before.x,now.y-before.y));safe&=!CheckCollisionRecs(bot->GetCollisionBounds(),{1400,400,96,900});
+            if(std::hypot(now.x-1850,now.y-800)<60)break;
+        }
+        bool arrived=std::hypot(bot->GetPosition().x-1850,bot->GetPosition().y-800)<60;
+        g.allObjectGroups=std::move(groups);g.flagWalkGrid.clear();g.flagGridLinks.clear();g.flagBotPlans.clear();return safe && arrived && longest<30;
+    }
     static void Practice(GameplayScreen& game,float dt) { game.UpdatePractice(dt); }
     static void Kill(GameplayScreen& game,Character* killer,Character* victim) { victim->TakeDamage(10000); game.RecordOfflineKill(killer,victim); }
     static bool Enemy(GameplayScreen& game,Character* a,Character* b) { return game.OfflineEnemies(a,b); }
@@ -159,6 +212,30 @@ struct GameplayEffectsTestAccess {
     static Vector2 FlagPosition(GameplayScreen& game,int team) { return game.flags[team].position; }
     static void ResetFlag(GameplayScreen& game,int team) { game.ResetFlag(team); }
     static float FlagDelay(GameplayScreen& game,int team) { return game.flags[team].respawnTimer; }
+    static bool RocketWall(GameplayScreen& g,Character* p) {
+        auto groups=g.allObjectGroups;g.allObjectGroups.clear();g.bonusProjectiles.clear();g.bonusBlasts.clear();
+        Vector2 origin=p->GetPosition();TmxObject wall{};wall.type=OBJECT_TYPE_RECTANGLE;wall.x=origin.x+100;wall.y=origin.y+30;wall.width=20;wall.height=140;
+        TmxObjectGroup group{};group.objects=&wall;group.objectsLength=1;g.allObjectGroups.push_back(group);
+        g.bonusProjectiles.push_back({{origin.x+40,origin.y+80},{760,0},0,2,0,true,p});g.UpdateBonuses(.1f);
+        bool stopped=g.bonusProjectiles.empty() && !g.bonusBlasts.empty() && g.bonusBlasts.back().position.x<=origin.x+108;
+        g.allObjectGroups=std::move(groups);g.bonusBlasts.clear();return stopped;
+    }
+    static void AwaitBonus(GameplayScreen& g,int index){g.awaitingBonusNode=index;}
+    static size_t BonusCount(const GameplayScreen& g){return g.bonusNodes.size();}
+    static bool NoFfaBase(const GameplayScreen& g){return !g.HasTeamBases() && !g.HasDeathmatchBases();}
+    static Vector2 BonusPoint(GameplayScreen& g,int index){return g.bonusNodes[index].position;}
+    static float BonusCooldown(GameplayScreen& g,int index){return g.bonusNodes[index].cooldown;}
+    static uint32_t BonusSerial(GameplayScreen& g,int index){return g.bonusNodes[index].serial;}
+    static void ReadyBonus(GameplayScreen& g,int index){g.bonusNodes[index].cooldown=0;}
+    static void Claim(GameplayScreen& g,int index,Character* c,uint32_t id=0){g.ClaimBonus(index,c,id);}
+    static void BonusTime(GameplayScreen& g,float dt){g.UpdateBonuses(dt);}
+    static void BonusBlast(GameplayScreen& g,int kind,Vector2 p,Character* owner){g.bonusBlasts.push_back({p,0,kind,0,true,owner});}
+    static void ClearBonusEffects(GameplayScreen& g){g.bonusProjectiles.clear();g.bonusBlasts.clear();}
+    static bool ThrowSpecial(GameplayScreen& g,Character* c,Vector2 target){return g.ThrowBonus(c,target,0);}
+    static int SpecialProjectiles(const GameplayScreen& g){return (int)g.bonusProjectiles.size();}
+    static void Grace(GameplayScreen& g,float amount){g.spawnGrace=amount;}
+    static void BonusPacket(GameplayScreen& g,const void* bytes,size_t size){g.HandleBonusPacket(bytes,size);}
+    static bool ClearArena(GameplayScreen& game,Vector2 point) {return game.ArenaClear(point,0);}
     static Vector2 DmSpawn(GameplayScreen& game,int identity) { return game.GetDeathmatchSpawnPoint(identity); }
     static void Respawn(GameplayScreen& game) { game.RespawnLocal(); }
     static void Resolve(GameplayScreen& game,Character* actor) { game.ResolveWorldCollision(actor); }
@@ -511,6 +588,11 @@ int main() {
                 actor.SetAimTarget(targetPos); WeaponPose pose=actor.GetWeaponPose(targetPos);
                 Vector2 delta{targetPos.x-pose.muzzle.x,targetPos.y-pose.muzzle.y};
                 check(std::abs(delta.x*pose.direction.y-delta.y*pose.direction.x)<0.02f,"barrel axis points exactly at aim target for skin, angle, and facing");
+                auto texture=LoadWeaponSlotTexture(weapon,skin);auto geometry=GetWeaponGeometry(texture,weapon);
+                float weaponScale=.15f*.45f*geometry.scale;auto hold=GetWeaponHold(texture,weapon,pose,weaponScale,actor.GetFaceDirection());
+                check(std::hypot(hold.trigger.x-pose.hand.x,hold.trigger.y-pose.hand.y)<.001f,"trigger hand stays attached to the gun pivot for every facing and angle");
+                if(weapon!=2){Vector2 delta{hold.support.x-hold.trigger.x,hold.support.y-hold.trigger.y};
+                    check(std::abs(delta.x*pose.direction.x+delta.y*pose.direction.y-(geometry.support.x-geometry.pivot.x)*weaponScale)<.01f,"support hand follows the foregrip along the actual weapon axis");}
                 check(actor.Shoot(targetPos),"aligned shot fires");
                 Vector2 bullet=actor.GetProjectiles().back()->GetPosition();
                 check(std::abs(bullet.x-pose.muzzle.x-pose.direction.x*2)<0.01f && std::abs(bullet.y-pose.muzzle.y-pose.direction.y*2)<0.01f,"projectile spawns at the same barrel point as flash");
@@ -587,6 +669,37 @@ int main() {
             check(remote.GetWeaponIndex()==weapon,"online player can equip new weapon slots");
             remote.ShootInDirection({-1,0});
             check(remote.GetProjectiles().size()==(weapon==6?7:1),"online visuals preserve new gun projectile counts");
+        }
+        for(int weapon=0;weapon<WeaponCount;++weapon) {
+            actor.ResetHealth(100); actor.SwitchWeapon(weapon); actor.SetEquipment();
+            const int capacity=Weapons[weapon].maxAmmo, reserve=Weapons[weapon].reserveAmmo;
+            check(actor.GetReserveAmmo()==reserve,"each gun starts with its configured finite reserve");
+            actor.SetShootCooldown(0); actor.Shoot({1000,150});
+            actor.TriggerReload(); actor.UpdateSkills(Weapons[weapon].reloadTime*.5f);
+            actor.SwitchWeapon((weapon+1)%WeaponCount); actor.SwitchWeapon(weapon);
+            check(!actor.IsReloading() && actor.GetAmmo()==capacity-1 && actor.GetReserveAmmo()==reserve,
+                  "switching weapons cancels reload without creating or consuming rounds");
+            actor.SetEquipment(-1,2); actor.TriggerReload(); actor.UpdateSkills(Weapons[weapon].reloadTime+.01f);
+            check(actor.GetAmmo()==capacity && actor.GetReserveAmmo()==reserve-1,
+                  "partial reload transfers only missing rounds from that gun's reserve");
+            int shots=1;
+            while(actor.GetAmmo()+actor.GetReserveAmmo()>0) {
+                if(actor.GetAmmo()==0) {
+                    int before=actor.GetReserveAmmo(); actor.TriggerReload();
+                    actor.UpdateSkills(Weapons[weapon].reloadTime+.01f);
+                    check(actor.GetAmmo()==std::min(capacity,before),"last reload uses only available reserve rounds");
+                }
+                actor.SetShootCooldown(0);
+                check(actor.Shoot({1000,150}),"remaining ammunition can be fired");
+                actor.GetProjectiles().clear(); ++shots;
+            }
+            actor.TriggerReload(); actor.UpdateSkills(10); actor.SetShootCooldown(0);
+            check(shots==capacity+reserve && !actor.IsReloading() && !actor.Shoot({1000,150}),
+                  "every gun exhausts its entire finite ammo supply and cannot reload or fire for free");
+            actor.SetEquipment(-1,3); actor.SwitchWeapon((weapon+1)%WeaponCount); actor.SwitchWeapon(weapon);
+            check(actor.GetAmmo()==0 && actor.GetReserveAmmo()==0,"equipment and gun changes preserve exhausted ammunition");
+            actor.ResetHealth(100);
+            check(actor.GetAmmo()==capacity && actor.GetReserveAmmo()==reserve,"respawn restores magazine and reserve");
         }
         BeginTextureMode(target); ClearBackground({10,18,27,255});
         DrawText("ASSAULT RIFLE / SNIPER  -  GRIP, FLASH AND TRACER",36,24,22,UiTheme::AccentGold());
@@ -768,7 +881,8 @@ int main() {
             for (int i=0;i<5;++i) game.GetLocalPlayer()->AddKill();
             GameplayEffectsTestAccess::Flow(game,0.1f);
             check(GameplayEffectsTestAccess::MatchOver(game),"FFA kill target ends offline match");
-            GameplayEffectsTestAccess::Flow(game,6.1f); check(game.ShouldReturnToLobby(),"offline match returns to setup");
+            GameplayEffectsTestAccess::Flow(game,30);check(!game.ShouldReturnToLobby(),"match report stays open until the player chooses the next action");
+            GameplayEffectsTestAccess::LeaveResults(game);check(game.ShouldReturnToLobby(),"results button returns offline match to setup");
         }
         Offline::Get().mode=Offline::Mode::TeamDeathmatch; Offline::Get().bots=3; Offline::Get().playerTeam=1;
         {
@@ -880,6 +994,34 @@ int main() {
             game.GetLocalPlayer()->SetPosition(botBase); GameplayEffectsTestAccess::Respawn(game);
             check(std::hypot(game.GetLocalPlayer()->GetPosition().x-target.x,game.GetLocalPlayer()->GetPosition().y-target.y)<111,"player respawn belongs to own team base");
         }
+        Offline::Get().bots=8;
+        {
+            GameplayScreen game(GameMode::PRACTICE);auto* p=game.GetLocalPlayer();Vector2 home=GameplayEffectsTestAccess::Base(game,1);
+            p->SetPosition({home.x,home.y-450});GameplayEffectsTestAccess::FlagPlan(game);
+            check(GameplayEffectsTestAccess::FlagRoles(game,1,0)==1 && GameplayEffectsTestAccess::FlagRoles(game,1,2)==1 && GameplayEffectsTestAccess::FlagRoles(game,1,4)==2,"flag squads split into one runner, one defender and separate flankers");
+            check(GameplayEffectsTestAccess::SpreadPlans(game,1),"flag squad objectives are separated instead of sharing a single target");
+            GameplayEffectsTestAccess::AssignCarrier(game,1,p);auto* hostile=GameplayEffectsTestAccess::Bot(game,0);hostile->SetPosition({home.x+350,home.y});GameplayEffectsTestAccess::AssignCarrier(game,2,hostile);
+            GameplayEffectsTestAccess::FlagPlan(game);
+            check(GameplayEffectsTestAccess::FlagRoles(game,1,3)==1 && GameplayEffectsTestAccess::FlagRoles(game,1,2)==1 && GameplayEffectsTestAccess::FlagRoles(game,1,1)==2,"player carrier gets spread escorts while one teammate intercepts danger and another guards home");
+            GameplayEffectsTestAccess::ResetFlag(game,1);GameplayEffectsTestAccess::ResetFlag(game,2);GameplayEffectsTestAccess::FlagPlan(game);
+            BotEnemy* oldRunner=nullptr;for(int i=0;i<8;++i){auto* b=GameplayEffectsTestAccess::Bot(game,i);if(b->GetTeamID()==1 && !oldRunner){oldRunner=b;}}
+            // Removing any teammate must leave exactly one living runner, never a whole squad chase.
+            oldRunner->TakeDamage(10000);GameplayEffectsTestAccess::FlagPlan(game);
+            check(GameplayEffectsTestAccess::FlagRoles(game,1,0)==1,"a dead teammate does not break the one-runner assignment");
+            check(GameplayEffectsTestAccess::FlagDetour(game),"flag runner walks around a blocking wall without clipping or teleporting");
+        }
+        {
+            bool audio=Character::IsCombatAudioEnabled();Character::SetCombatAudioEnabled(false);
+            auto savedMap=Offline::Get().map;auto savedNetMap=NetworkManager::GetInstance().selectedMapName;
+            for(const char* map:{"MagmaRift","DesertOutpost","AbandonedFoundry"}){
+                Offline::Get().map=map;NetworkManager::GetInstance().selectedMapName=map;
+                GameplayScreen game(GameMode::PRACTICE);game.GetLocalPlayer()->SetGodMode(true);game.GetLocalPlayer()->SetPosition({game.GetWorldWidth()/2,220});
+                for(int i=0;i<8;++i)GameplayEffectsTestAccess::Bot(game,i)->SetGodMode(true);
+                for(int frame=0;frame<900 && GameplayEffectsTestAccess::Score(game,1)+GameplayEffectsTestAccess::Score(game,2)==0;++frame){GameplayEffectsTestAccess::Practice(game,.1f);GameplayEffectsTestAccess::Flags(game,.1f);}
+                check(GameplayEffectsTestAccess::Score(game,1)+GameplayEffectsTestAccess::Score(game,2)>0,(std::string("flag bots complete a real delivery using map routes on ")+map).c_str());
+            }
+            Offline::Get().map=savedMap;NetworkManager::GetInstance().selectedMapName=savedNetMap;Character::SetCombatAudioEnabled(audio);
+        }
         Offline::Get().mode=Offline::Mode::TeamDeathmatch; Offline::Get().bots=3;
         {
             GameplayScreen game(GameMode::PRACTICE); auto* player=game.GetLocalPlayer();
@@ -891,15 +1033,261 @@ int main() {
         Offline::Get().mode=Offline::Mode::FreeForAll;
         {
             GameplayScreen game(GameMode::PRACTICE); auto* player=game.GetLocalPlayer();
-            player->SetPosition({900,200}); GameplayEffectsTestAccess::Respawn(game);
-            Vector2 spawn=GameplayEffectsTestAccess::DmSpawn(game,0);
-            check(std::hypot(player->GetPosition().x-spawn.x,player->GetPosition().y-spawn.y)<1,"DM player uses assigned respawn outpost");
-            auto* bot=GameplayEffectsTestAccess::Bot(game,0); bot->TakeDamage(10000); GameplayEffectsTestAccess::Practice(game,4.1f);
-            spawn=GameplayEffectsTestAccess::DmSpawn(game,1);
-            check(!bot->IsDead() && std::hypot(bot->GetPosition().x-spawn.x,bot->GetPosition().y-spawn.y)<1,"DM bot respawns at assigned outpost");
-            GameplayEffectsTestAccess::Focus(game,player->GetPosition()); game.Draw(target); capture("bin/dm-outpost-preview.png");
+            Vector2 before=player->GetPosition();GameplayEffectsTestAccess::Respawn(game);
+            Vector2 spawn=player->GetPosition();
+            check(GameplayEffectsTestAccess::ClearArena(game,spawn) && std::hypot(spawn.x-before.x,spawn.y-before.y)>100,"FFA respawns at a different clear random location");
+            auto* bot=GameplayEffectsTestAccess::Bot(game,0);before=bot->GetPosition();bot->TakeDamage(10000);GameplayEffectsTestAccess::Practice(game,4.1f);
+            spawn=bot->GetPosition();check(!bot->IsDead() && GameplayEffectsTestAccess::ClearArena(game,spawn),"FFA bot respawns safely away from solid cover");
+            GameplayEffectsTestAccess::Focus(game,player->GetPosition());game.Draw(target);capture("bin/ffa-random-spawn-preview.png");
         }
         Offline::Get()=saved;
+    }
+    {
+        BeginTextureMode(target);ClearBackground({24,32,40,255});
+        DrawText("SPECIAL PICKUPS / REDESIGNED HARDWARE",35,24,24,UiTheme::AccentGold());
+        for(int kind=0;kind<6;++kind){float x=35+(kind%3)*425,y=85+(kind/3)*160;
+            DrawBonusArt(kind,{x,y,370,118});DrawText(Bonus::Name(kind),(int)x+30,(int)y+120,16,Bonus::Tint(kind));}
+        DrawText("DIRECTIONAL FLAMES / FROST BURST / BURNING GROUND",35,428,18,LIGHTGRAY);
+        DrawBonusFlame({60,550},{1,-.1f},290,35,.35f);
+        DrawBonusBurst(3,{600,565},.45f,true);DrawBonusIce({600,540},1.9f);
+        DrawBonusBurst(5,{1060,570},1.3f,true);
+        EndTextureMode();capture("bin/special-pickups-effects-preview.png");
+    }
+    {
+        Medals::Tracker tracker;
+        check(tracker.Kill(1,2,1,0).empty(),"first kill has no multikill medal");
+        auto medals=tracker.Kill(1,3,1,3.9f);check(medals.size()==1 && medals[0]==Medals::DoubleKill,"second kill within four seconds earns double kill");
+        medals=tracker.Kill(1,4,1,4.1f);check(medals.size()==1 && medals[0]==Medals::TripleKill,"third chained kill earns triple kill");
+        medals=tracker.Kill(2,1,2,5);check(medals.size()==2 && medals[0]==Medals::Revenge && medals[1]==Medals::Shutdown,"revenge and shutdown use the victim's actual last killer and living streak");
+        check(tracker.Kill(2,5,2,10).empty(),"expired multikill windows do not award medals");
+        tracker.Reset();tracker.Kill(2,1,1,0);tracker.Kill(1,1,1,1);
+        medals=tracker.Kill(1,2,1,2);check(medals.size()==1 && medals[0]==Medals::Revenge,"revenge survives a respawn or environmental death");
+        tracker.Reset();check(tracker.Kill(1,1,1,0).empty() && tracker.Kill(1,2,1,1,false).empty(),"suicides and team kills cannot earn medals");
+        BotEnemy bot({500,500},CharacterPreview::BodyPath(1));bot.SetDifficulty(2);bot.SwitchWeapon(0);
+        while(bot.GetAmmo()+bot.GetReserveAmmo()>0){if(bot.GetAmmo()==0){bot.TriggerReload();bot.UpdateSkills(10);}bot.SetShootCooldown(0);bot.Shoot({1400,500});bot.GetProjectiles().clear();}
+        bot.ManageAmmo();check(bot.GetWeaponIndex()==2 && bot.GetAmmo()==Weapons[2].maxAmmo,"bots switch to pistol only when primary magazine and reserve are exhausted");
+        bot.ResetHealth(100);bot.ManageAmmo();check(bot.GetWeaponIndex()==0,"respawn restores the bot's original primary weapon");
+        auto clear=[](Vector2 p){return p.x>100 && p.x<2000 && p.y>100 && p.y<2000;};
+        bot.SetPosition({500,500});bot.SetTacticalContext({{{520,500},230}},clear,[](Vector2,Vector2){return true;});
+        bot.UpdateAI(.1f,{950,500});
+        check(bot.IsEvading() && bot.GetPosition().x<500 && bot.GetProjectiles().empty(),"bots move away from imminent grenade danger and stop firing while escaping");
+        bot.ResetHealth(100);bot.SetPosition({500,500});bot.SetShootCooldown(0);bot.Shoot({950,500});bot.TriggerReload();
+        bot.SetTacticalContext({},clear,[](Vector2,Vector2 end){return end.y>470;});
+        bot.UpdateAI(.1f,{950,500});check(bot.IsUsingCover() && bot.GetPosition().y<500,"reloading bots choose reachable cover that blocks enemy sight");
+        bot.ApplySlow(2,0);Vector2 frozen=bot.GetPosition();bot.UpdateAI(.2f,{950,500});
+        check(bot.GetPosition().x==frozen.x && bot.GetPosition().y==frozen.y,"tactical AI respects full freeze immobilization");
+        auto saved=Offline::Get();Offline::Get().mode=Offline::Mode::FreeForAll;Offline::Get().bots=3;
+        {GameplayScreen game(GameMode::PRACTICE);
+            GameplayEffectsTestAccess::MedalKill(game,1,2,1);GameplayEffectsTestAccess::MedalKill(game,1,3,1);
+            GameplayEffectsTestAccess::MedalKill(game,1,4,1);
+            check(GameplayEffectsTestAccess::Medals(game)==1 && GameplayEffectsTestAccess::MedalKind(game)==Medals::TripleKill,"triple kill upgrades an active double kill without duplicate toast");
+            GameplayEffectsTestAccess::MedalTick(game,.4f);BeginTextureMode(target);ClearBackground({12,24,30,255});GameplayEffectsTestAccess::DrawMedal(game);EndTextureMode();capture("bin/combat-medal-preview.png");
+            GameplayEffectsTestAccess::MedalTick(game,2.5f);check(GameplayEffectsTestAccess::Medals(game)==0,"medal presentation expires without covering the HUD permanently");
+            auto* champion=GameplayEffectsTestAccess::Bot(game,0);champion->AddKill();champion->AddKill();
+            game.GetLocalPlayer()->ConfirmDamage(20000);
+            check(GameplayEffectsTestAccess::Winners(game).front()==champion,"FFA podium follows winning kills rather than MVP damage rating");
+            GameplayEffectsTestAccess::Finish(game);GameplayEffectsTestAccess::ResultAge(game,5);game.Draw(target);capture("bin/victory-ffa-preview.png");
+            GameplayEffectsTestAccess::RestartMatch(game);check(GameplayEffectsTestAccess::Medals(game)==0,"rematch clears medal presentation");
+            check(GameplayEffectsTestAccess::BotHazards(game),"actual grenade and incendiary zones reach offline bot tactical decisions");
+            GameplayEffectsTestAccess::Kill(game,game.GetLocalPlayer(),GameplayEffectsTestAccess::Bot(game,0));
+            GameplayEffectsTestAccess::Kill(game,game.GetLocalPlayer(),GameplayEffectsTestAccess::Bot(game,1));
+            check(GameplayEffectsTestAccess::Medals(game)==1 && GameplayEffectsTestAccess::MedalKind(game)==Medals::DoubleKill,"actual offline kill events award local combat medals");
+        }Offline::Get()=saved;
+    }
+    {
+        auto left=CombatAudio::Mix({-300,0},{0,0},1000),right=CombatAudio::Mix({300,0},{0,0},1000);
+        check(left.pan<0 && right.pan>0 && std::abs(left.volume-right.volume)<.0001f,"combat sounds pan left/right at equal distance");
+        check(CombatAudio::Mix({50,0},{0,0},1000).volume>right.volume && CombatAudio::Mix({1100,0},{0,0},1000).volume==0,"distant combat sounds attenuate and stop outside hearing range");
+        Player actor({300,300});actor.SwitchWeapon(3);Vector2 hand=actor.GetHandPosition();
+        actor.Shoot({hand.x+1000,hand.y});float recoil=actor.GetRecoil();actor.SetShootCooldown(0);actor.Shoot({hand.x+1000,hand.y});
+        check(actor.GetRecoil()>recoil && actor.GetCasingCount()==2,"successive rifle shots build recoil and eject individual casings");
+        check(actor.GetLastShotDirection().y<0,"recoil changes the next actual bullet direction");
+        uint32_t shot=actor.GetProjectiles().back()->GetShotID();actor.ConfirmDamage(20,shot);actor.ConfirmDamage(10,shot);
+        check(actor.GetCombatStats().shots==2 && actor.GetCombatStats().hits==1 && actor.GetCombatStats().damage==30 && actor.GetCombatStats().Accuracy()==50,"accuracy counts a shot once even when pellets hit multiple times");
+        actor.UpdateSkills(2);check(actor.GetRecoil()==0 && actor.GetCasingCount()==0,"recoil recovers and casing particles expire");
+        actor.ResetHealth(100);check(actor.GetCombatStats().damage==30,"respawning preserves match statistics");actor.ResetMatchStats();check(actor.GetCombatStats().shots==0 && actor.GetCombatStats().damage==0,"rematch resets combat statistics");
+        auto saved=Offline::Get();Offline::Get().mode=Offline::Mode::Elimination;Offline::Get().bots=3;Offline::Get().playerTeam=1;
+        {
+            GameplayScreen game(GameMode::PRACTICE);auto* p=game.GetLocalPlayer();auto* enemy=GameplayEffectsTestAccess::Bot(game,0);auto* ally=GameplayEffectsTestAccess::Bot(game,1);
+            check(GameplayEffectsTestAccess::BulletWall(game),"fast bullets sweep through thin wall geometry and create impact particles");
+            p->TakeDamage(100);GameplayEffectsTestAccess::NoteDamage(game,enemy,p,70,3);GameplayEffectsTestAccess::NoteDamage(game,enemy,p,30,3);
+            GameplayEffectsTestAccess::Kill(game,enemy,p);GameplayEffectsTestAccess::Spectate(game);
+            check(GameplayEffectsTestAccess::Watched(game)==ally && GameplayEffectsTestAccess::Choices(game)==1,"dead team players can spectate only surviving teammates");
+            check(GameplayEffectsTestAccess::RecapEntries(game)==1 && GameplayEffectsTestAccess::RecapDamage(game)==100,"death recap aggregates damage and hits by attacker and weapon");
+            GameplayEffectsTestAccess::Focus(game,ally->GetPosition());game.Draw(target);capture("bin/death-recap-spectating-preview.png");
+            GameplayEffectsTestAccess::Capture(game,ally);ally->ConfirmDamage(450);GameplayEffectsTestAccess::Finish(game);
+            check(GameplayEffectsTestAccess::Mvp(game)==ally,"MVP rewards objective captures and damage as well as kills");
+            check(!MatchPresentation::Ready(0) && !MatchPresentation::Ready(7.4f) && MatchPresentation::Ready(7.8f),"results controls stay locked during the end-of-match presentation");
+            GameplayEffectsTestAccess::ResultAge(game,.35f);game.Draw(target);capture("bin/match-end-settle-preview.png");
+            GameplayEffectsTestAccess::ResultAge(game,1.8f);game.Draw(target);capture("bin/match-report-loading-preview.png");
+            GameplayEffectsTestAccess::Winner(game,1);
+            auto winners=GameplayEffectsTestAccess::Winners(game);
+            check(winners.size()==2 && winners.front()==ally && winners.back()==p,"victory lineup includes only winning teammates, including fallen players");
+            Vector2 beforePose=p->GetPosition();int beforeAmmo=p->GetAmmo();
+            GameplayEffectsTestAccess::ResultAge(game,5);game.Draw(target);capture("bin/victory-squad-preview.png");
+            check(p->IsDead() && p->GetAmmo()==beforeAmmo && p->GetPosition().x==beforePose.x && p->GetPosition().y==beforePose.y,"victory poses preserve actual life, ammo and world position");
+            GameplayEffectsTestAccess::ResultAge(game,8.2f);game.Draw(target);capture("bin/match-results-preview.png");GameplayEffectsTestAccess::RestartMatch(game);
+            check(!GameplayEffectsTestAccess::MatchOver(game) && !p->IsDead() && p->GetDeaths()==0 && ally->GetCombatStats().captures==0 && GameplayEffectsTestAccess::RecapEntries(game)==0,"offline rematch restores fighters, clears results and resets match statistics");
+        }
+        Offline::Get().mode=Offline::Mode::FreeForAll;
+        {GameplayScreen game(GameMode::PRACTICE);auto* p=game.GetLocalPlayer();p->TakeDamage(100);GameplayEffectsTestAccess::Spectate(game);check(GameplayEffectsTestAccess::Choices(game)==3,"FFA spectators can watch every living opponent");}
+        auto& nm=NetworkManager::GetInstance();check(nm.HostRoom(17779),"host online combat report test");nm.currentGameMode=OnlineGameMode::TEAM_DEATHMATCH;nm.SetPlayerTeam(nm.GetLocalPlayerID(),1);nm.UpsertPlayer(9,"Opponent",1,0,2);
+        {
+            GameplayScreen game(GameMode::ONLINE);auto* p=game.GetLocalPlayer();p->SetShootCooldown(0);Vector2 hand=p->GetHandPosition();p->Shoot({hand.x+1000,hand.y});
+            PacketDamageConfirm confirm{};confirm.header={PacketType::DAMAGE_CONFIRM,9};confirm.recipient=nm.GetLocalPlayerID();confirm.serial=1;confirm.shotID=1;confirm.damage=24;
+            check(GameplayEffectsTestAccess::Receipt(game,confirm) && !GameplayEffectsTestAccess::Receipt(game,confirm) && p->GetCombatStats().damage==24,"online damage confirmations credit actual damage exactly once");
+            confirm.serial=2;confirm.shotID=500;check(!GameplayEffectsTestAccess::Receipt(game,confirm),"online accuracy rejects confirmations for shots never fired");
+            nm.UpsertPlayer(10,"Second Opponent",2,0,2);
+            GameplayEffectsTestAccess::OnlineKill(game,nm.GetLocalPlayerID(),9,3);
+            GameplayEffectsTestAccess::OnlineKill(game,nm.GetLocalPlayerID(),9,3);
+            check(GameplayEffectsTestAccess::Medals(game)==0,"duplicate online kill packets cannot award a false double kill");
+            GameplayEffectsTestAccess::OnlineKill(game,nm.GetLocalPlayerID(),10,3);
+            check(GameplayEffectsTestAccess::Medals(game)==1 && GameplayEffectsTestAccess::MedalKind(game)==Medals::DoubleKill,"confirmed online kills award local medals across separate victims");
+            GameplayEffectsTestAccess::Finish(game);GameplayEffectsTestAccess::RestartMatch(game);
+            check(!GameplayEffectsTestAccess::MatchOver(game) && p->GetCombatStats().damage==0 && nm.teamScores[1]==0,"host rematch resets online scores and combat report");
+            confirm.serial=3;confirm.shotID=0;check(!GameplayEffectsTestAccess::Receipt(game,confirm),"delayed confirmations from the previous match cannot affect a rematch");
+        }
+        nm.Shutdown();nm.Initialize();Offline::Get()=saved;
+    }
+    {
+        Player actor({0,0});Character::SetCombatAudioEnabled(false);
+        BeginTextureMode(target);ClearBackground({64,79,88,255});
+        DrawText("WEAPON GRIP / LIVE CHARACTER RENDERER",28,16,22,UiTheme::AccentGold());
+        Camera2D view{};view.offset={0,0};view.target={0,0};view.zoom=1.45f;BeginMode2D(view);
+        for(int weapon=0;weapon<WeaponCount;++weapon)for(int row=0;row<3;++row){
+            actor.ResetHealth(100);actor.SwitchWeapon(weapon);actor.SetPosition({55+weapon*112.0f,36+row*144.0f});int facing=row==1?-1:1;actor.SetFaceDirection(facing);
+            Vector2 hand=actor.GetHandPosition();actor.SetAimTarget({hand.x+facing*600,hand.y+(row==2?-260:0)});actor.Draw();
+        }
+        EndMode2D();EndTextureMode();capture("bin/weapon-grip-preview.png");
+        BeginTextureMode(target);ClearBackground({64,79,88,255});DrawText("POWER WEAPONS / MELEE / THROWABLE GRIPS",28,16,22,UiTheme::AccentGold());BeginMode2D(view);
+        for(int item=0;item<6;++item)for(int row=0;row<2;++row){actor.ResetHealth(100);actor.SetPosition({70+item*145.0f,45+row*190.0f});actor.SetFaceDirection(row==0?1:-1);
+            actor.SetEquipment();if(item<3)actor.GiveBonus(item);else if(item==3)actor.SetEquipment(0,0);else actor.SetEquipment(-1,0,item-4);
+            Vector2 hand=actor.GetHandPosition();actor.SetAimTarget({hand.x+(row==0?600:-600),hand.y+(row==0?-120:100)});actor.Draw();}
+        EndMode2D();EndTextureMode();capture("bin/equipment-grip-preview.png");Character::SetCombatAudioEnabled(true);
+    }
+    {
+        bool oldEffects=Settings::Get().effects;Settings::Get().effects=true;Character::SetCombatAudioEnabled(false);
+        Player actor({180,130});actor.UpdateSkills(.016f);Rectangle footprint=actor.GetCollisionBounds();
+        actor.SetPosition({190,130});actor.UpdateSkills(.0667f);check(actor.GetBodyLean()>0 && actor.GetBodyLean()<=4.5f,"running adds bounded visual lean in the travel direction");
+        auto feet=actor.GetCollisionBounds();check(std::abs(feet.x-footprint.x-10)<.001f && feet.y==footprint.y,"body lean never changes the ground collision footprint");
+        actor.UpdateSkills(1);check(std::abs(actor.GetBodyLean())<.01f,"body smoothly returns upright when movement stops");
+        float grounded=actor.GetJumpShadowRadius();actor.SetJumpHeight(85);actor.UpdateSkills(.016f);
+        check(actor.GetJumpShadowRadius()<grounded,"jump shadow shrinks with height while remaining on the ground");
+        actor.SetJumpHeight(0);actor.UpdateSkills(.016f);check(actor.GetLandingParticleCount()==10,"landing emits one bounded dust burst");
+        actor.UpdateSkills(.016f);check(actor.GetLandingParticleCount()==10,"standing on the floor does not repeatedly emit landing dust");
+        actor.UpdateSkills(1);check(actor.GetLandingParticleCount()==0,"landing particles expire");
+        Settings::Get().effects=false;actor.SetJumpHeight(80);actor.UpdateSkills(.016f);actor.SetJumpHeight(0);actor.UpdateSkills(.016f);
+        check(actor.GetLandingParticleCount()==0,"effects toggle suppresses landing particles");Settings::Get().effects=true;
+        check(WeaponReload::Type(1)==WeaponReload::Style::Tube && WeaponReload::Type(6)==WeaponReload::Style::BreakOpen && WeaponReload::Type(3)==WeaponReload::Style::Magazine,"shotgun, double barrel and rifle use distinct reload mechanisms");
+        check(WeaponReload::MagazineTravel(.32f)>15 && WeaponReload::MagazineTravel(.96f)==0 && WeaponReload::BreakAngle(.5f)>25 && WeaponReload::BreakAngle(1)==0,"magazine and break-action components leave the weapon then return to their closed positions");
+        BeginTextureMode(target);ClearBackground({64,79,88,255});DrawText("ANIMATED RELOADS / REMOVE - LOAD - CHAMBER",25,16,20,UiTheme::AccentGold());
+        Camera2D view{{0,0},{0,0},0,1.4f};BeginMode2D(view);
+        for(int weapon=0;weapon<WeaponCount;++weapon)for(int row=0;row<3;++row){actor.ResetHealth(100);actor.SwitchWeapon(weapon);actor.SetPosition({60+weapon*113.0f,38+row*147.0f});actor.SetFaceDirection(1);
+            Vector2 hand=actor.GetHandPosition();actor.Shoot({hand.x+600,hand.y});actor.TriggerReload();actor.UpdateSkills(Weapons[weapon].reloadTime*(row==0?.2f:row==1?.4f:.65f));actor.Draw();}
+        EndMode2D();EndTextureMode();capture("bin/animated-reloads-preview.png");
+        actor.ResetHealth(100);actor.SwitchWeapon(3);Vector2 hand=actor.GetHandPosition();actor.Shoot({hand.x+600,hand.y});actor.TriggerReload();int reserve=actor.GetReserveAmmo();actor.UpdateSkills(Weapons[3].reloadTime*.5f);
+        check(actor.GetAmmo()==Weapons[3].maxAmmo-1 && actor.GetReserveAmmo()==reserve,"visual magazine movement does not transfer ammunition early");actor.SwitchWeapon(2);actor.SwitchWeapon(3);check(!actor.IsReloading() && actor.GetReserveAmmo()==reserve,"canceling a reload preserves magazine and reserve counts");
+        RemotePlayer remote({450,180},CharacterPreview::BodyPath(2));remote.SwitchWeapon(3);remote.SetEquipment();remote.SetRemoteReload(true,.4f);
+        check(remote.IsReloading() && std::abs(remote.GetReloadProgress()-.4f)<.001f,"online reload state starts at the replicated progress");
+        int remoteAmmo=remote.GetAmmo();remote.Update(.1f);check(remote.GetReloadProgress()>.4f && remote.GetAmmo()==remoteAmmo,"online reload animation interpolates without inventing local ammo transfers");remote.SetEquipment();remote.SetRemoteReload(false,1);check(!remote.IsReloading(),"online reload cancellation clears the visual action");
+        BeginTextureMode(target);ClearBackground({64,79,88,255});DrawText("MOVEMENT / LEAN - JUMP SHADOW - LANDING DUST",25,16,20,UiTheme::AccentGold());BeginMode2D(view);
+        actor.ResetHealth(100);actor.SetPosition({130,190});actor.UpdateSkills(.016f);actor.SetPosition({145,190});actor.UpdateSkills(.1f);actor.Draw();
+        actor.ResetHealth(100);actor.SetPosition({440,260});actor.SetJumpHeight(80);actor.UpdateSkills(.016f);actor.Draw();
+        actor.ResetHealth(100);actor.SetPosition({740,190});actor.SetSurfaceStyle(1);actor.SetJumpHeight(100);actor.UpdateSkills(.016f);actor.SetJumpHeight(0);actor.UpdateSkills(.016f);actor.UpdateSkills(.08f);actor.Draw();
+        EndMode2D();EndTextureMode();capture("bin/movement-polish-preview.png");
+        for(const char* name:{"MagmaRift","AbandonedFoundry","DesertOutpost"}){
+            auto* map=MapRegistry::GetInstance().GetMap(name);Vector2 focus=std::string(name)=="MagmaRift"?Vector2{1900,800}:std::string(name)=="AbandonedFoundry"?Vector2{2400,2180}:Vector2{2400,1450};
+            Camera2D camera{{650,340},focus,0,1};Rectangle viewport{focus.x-650,focus.y-340,1300,680};
+            auto render=[&](float time){BeginTextureMode(target);ClearBackground({15,21,27,255});BeginMode2D(camera);DrawMapWithMaterials(map->tmxMap,&camera,&viewport);DrawMapEffects(map->tmxMap,time,viewport);EndMode2D();EndTextureMode();Image result=LoadImageFromTexture(target.texture);return result;};
+            Image a=render(.2f),b=render(2.7f);int changed=0;for(int y=30;y<650;y+=6)for(int x=30;x<1270;x+=6){Color c=GetImageColor(a,x,y),d=GetImageColor(b,x,y);if(std::abs((int)c.r-d.r)+std::abs((int)c.g-d.g)+std::abs((int)c.b-d.b)>4)++changed;}
+            check(changed>15,"each map has visibly animated authored atmosphere");UnloadImage(a);UnloadImage(b);capture(TextFormat("bin/%s-atmosphere-preview.png",name));
+            Settings::Get().effects=false;a=render(.2f);b=render(2.7f);changed=0;for(int y=20;y<660;y+=12)for(int x=20;x<1280;x+=12){Color c=GetImageColor(a,x,y),d=GetImageColor(b,x,y);if(c.r!=d.r || c.g!=d.g || c.b!=d.b)++changed;}check(changed==0,"effects-off keeps every map's terrain stable");UnloadImage(a);UnloadImage(b);Settings::Get().effects=true;
+        }
+        Character::SetCombatAudioEnabled(true);Settings::Get().effects=oldEffects;
+    }
+    // FFA power-weapon flow: mode isolation, safe distributed spawns, ownership, ammo and effects.
+    {
+        auto setup=Offline::Get();auto& nm=NetworkManager::GetInstance();auto map=nm.selectedMapName;
+        Offline::Get().bots=1;Offline::Get().mode=Offline::Mode::FreeForAll;
+        for(const char* arena:{"MagmaRift","AbandonedFoundry","DesertOutpost"}) {
+            nm.selectedMapName=arena;Offline::Get().map=arena;
+            GameplayScreen game(GameMode::PRACTICE);auto* p=game.GetLocalPlayer();auto* bot=GameplayEffectsTestAccess::Bot(game,0);
+            check(GameplayEffectsTestAccess::BonusCount(game)==6 && GameplayEffectsTestAccess::NoFfaBase(game),"FFA alone has six special pickups and no outpost bases");
+            for(int i=0;i<6;++i){Vector2 node=GameplayEffectsTestAccess::BonusPoint(game,i);check(GameplayEffectsTestAccess::ClearArena(game,node),"pickup stands on traversable ground");
+                for(int j=0;j<i;++j){Vector2 other=GameplayEffectsTestAccess::BonusPoint(game,j);check(std::hypot(node.x-other.x,node.y-other.y)>500,"pickup locations remain distributed across the arena");}}
+            for(int i=0;i<10;++i){GameplayEffectsTestAccess::Respawn(game);Vector2 pos=p->GetPosition();check(GameplayEffectsTestAccess::ClearArena(game,pos),"repeated FFA respawns stay outside map collision");
+                Vector2 enemy=bot->GetPosition();check(std::hypot(pos.x-enemy.x,pos.y-enemy.y)>600,"random respawn avoids the live opponent");}
+            GameplayEffectsTestAccess::Grace(game,0);check(!GameplayEffectsTestAccess::CanBag(game),"FFA cannot change bags by returning to the old spawn location");
+            GameplayEffectsTestAccess::Respawn(game);check(GameplayEffectsTestAccess::CanBag(game),"FFA bag change is available immediately after respawn");
+            for(int kind=0;kind<6;++kind){GameplayEffectsTestAccess::ReadyBonus(game,kind);Vector2 node=GameplayEffectsTestAccess::BonusPoint(game,kind);
+                p->SetPosition({node.x+300,node.y});GameplayEffectsTestAccess::Claim(game,kind,p);check(GameplayEffectsTestAccess::BonusSerial(game,kind)==0,"distant player cannot consume pickup");
+                p->SetPosition(node);GameplayEffectsTestAccess::Claim(game,kind,p);check(GameplayEffectsTestAccess::BonusSerial(game,kind)==1 && GameplayEffectsTestAccess::BonusCooldown(game,kind)>20,"claim consumes one pickup and starts its respawn timer");
+                GameplayEffectsTestAccess::Claim(game,kind,bot,1);check(GameplayEffectsTestAccess::BonusSerial(game,kind)==1,"second claimant cannot duplicate an unavailable pickup");
+                if(kind<3){check(p->BonusEquipped() && p->GetBonusAmmo()==Bonus::Ammo(kind),"power gun is equipped with bounded pickup ammo");
+                    int normal=p->GetAmmo();p->SetShootCooldown(0);check(p->Shoot({node.x+500,node.y+80}),"special gun fires");
+                    check(p->GetBonusAmmo()==Bonus::Ammo(kind)-1 && p->GetAmmo()==normal && p->GetProjectiles().empty(),"special shot consumes its own ammunition without spawning an ordinary bullet");
+                    check(p->ConsumeBonusShot()==kind,"special shot event preserves its weapon kind");}
+                else check(p->GetBonusThrow()==kind && p->GetBonusCharges()==2,"special throw pickup gives two charges");
+            }
+            p->GiveBonus(3);Vector2 point=GameplayEffectsTestAccess::BonusPoint(game,3);p->SetPosition(point);bot->SetPosition({point.x+80,point.y});
+            check(GameplayEffectsTestAccess::ThrowSpecial(game,p,{point.x+180,point.y}),"collected freeze bomb can be thrown");
+            check(p->GetBonusCharges()==1 && GameplayEffectsTestAccess::SpecialProjectiles(game)==1,"throw spends one finite charge and creates a traveling projectile");
+            GameplayEffectsTestAccess::ClearBonusEffects(game);GameplayEffectsTestAccess::BonusBlast(game,3,point,p);GameplayEffectsTestAccess::BonusTime(game,.01f);
+            check(p->IsFrozen() && bot->IsFrozen() && p->GetSlowFactor()==0 && !p->ActivateDash({1,0}),"freeze fully immobilizes thrower and enemy and blocks dash escape");
+            Vector2 frozenPlayer=p->GetPosition(),frozenBot=bot->GetPosition();p->SetJumpHeight(30);
+            p->UpdateSkills(.1f);p->UpdatePhysics(.1f);bot->UpdateAI(.1f,{point.x+800,point.y});bot->MoveToObjective(.1f,{point.x+800,point.y});
+            check(p->GetPosition().x==frozenPlayer.x && p->GetPosition().y==frozenPlayer.y && p->GetJumpHeight()==30 &&
+                  bot->GetPosition().x==frozenBot.x && bot->GetPosition().y==frozenBot.y,
+                  "frozen player cannot drift vertically and frozen bots cannot walk or pursue objectives");
+            p->SetJumpHeight(0);
+            if(std::string(arena)=="MagmaRift") {GameplayEffectsTestAccess::Focus(game,point,1.3f);game.Draw(target);capture("bin/special-freeze-preview.png");}
+            p->UpdateSkills(3);bot->Update(3);check(p->GetSlowFactor()==1 && bot->GetSlowFactor()==1,"freeze wears off for both fighters");
+            GameplayEffectsTestAccess::ClearBonusEffects(game);p->ResetHealth(100);bot->ResetHealth(100);
+            p->ActivateDash({1,0});GameplayEffectsTestAccess::BonusBlast(game,4,point,p);GameplayEffectsTestAccess::BonusTime(game,.01f);
+            check(p->GetDashTimer()==0 && p->GetSlowFactor()>.4f && p->GetSlowFactor()<1 && bot->GetFlashBlind()>0,"shock interrupts dash, slows and briefly disorients opponents");
+            GameplayEffectsTestAccess::ClearBonusEffects(game);p->ResetHealth(100);bot->ResetHealth(100);
+            GameplayEffectsTestAccess::BonusBlast(game,2,point,p);GameplayEffectsTestAccess::BonusTime(game,.01f);
+            check(p->GetHealth()==30 && bot->GetHealth()==30,"bazooka blast damages multiple targets, including the shooter");
+            GameplayEffectsTestAccess::ClearBonusEffects(game);p->ResetHealth(100);bot->ResetHealth(100);
+            GameplayEffectsTestAccess::BonusBlast(game,5,point,p);GameplayEffectsTestAccess::BonusTime(game,.5f);check(p->GetHealth()==92 && bot->GetHealth()==92,"incendiary area applies timed damage including to its thrower");
+            if(std::string(arena)=="MagmaRift") {GameplayEffectsTestAccess::Focus(game,point,1.3f);game.Draw(target);capture("bin/special-fire-preview.png");}
+            p->ResetHealth(100);bot->ResetHealth(100);check(GameplayEffectsTestAccess::RocketWall(game,p),"rocket sweeps stop at wall collision and explode instead of tunneling through it");
+            p->GiveBonus(2);p->GiveBonus(4);GameplayEffectsTestAccess::Respawn(game);check(p->GetBonusAmmo()==0 && p->GetBonusCharges()==0,"death/respawn clears power weapons and special throws");
+            GameplayEffectsTestAccess::ClearBonusEffects(game);p->SetPosition(GameplayEffectsTestAccess::BonusPoint(game,1));p->GiveBonus(1);
+            for(int i=0;i<6;++i)GameplayEffectsTestAccess::ReadyBonus(game,i);
+            GameplayEffectsTestAccess::Focus(game,{game.GetWorldWidth()*.5f,game.GetWorldHeight()*.5f},.43f);game.Draw(target);capture(TextFormat("bin/ffa-special-%s.png",arena));
+        }
+        nm.selectedMapName=map;
+        for(auto mode:{Offline::Mode::Training,Offline::Mode::TeamDeathmatch,Offline::Mode::Elimination,Offline::Mode::Deathmatch}) {
+            Offline::Get().mode=mode;GameplayScreen game(GameMode::PRACTICE);
+            check(GameplayEffectsTestAccess::BonusCount(game)==0,"training, TDM, elimination and flag never spawn special pickups");
+            auto* p=game.GetLocalPlayer();p->GiveBonus(3);check(!GameplayEffectsTestAccess::ThrowSpecial(game,p,p->GetPosition()),"special throws are disabled outside FFA");
+        }
+        check(nm.HostRoom(17778),"host bonus-claim validation test");nm.currentGameMode=OnlineGameMode::FREE_FOR_ALL;nm.UpsertPlayer(9,"Claimant",1,0,0);
+        {
+            GameplayScreen game(GameMode::ONLINE);check(GameplayEffectsTestAccess::BonusCount(game)==6,"online FFA also spawns special pickups");
+            auto* remote=GameplayEffectsTestAccess::Remote(game,9);
+            GameplayEffectsTestAccess::ReadyBonus(game,0);remote->SetPosition(GameplayEffectsTestAccess::BonusPoint(game,0));
+            PacketBonusClaim request{};request.header={PacketType::BONUS_CLAIM,9};request.node=0;
+            GameplayEffectsTestAccess::BonusPacket(game,&request,sizeof(request));
+            check(remote->GetBonusGun()==0 && GameplayEffectsTestAccess::BonusSerial(game,0)==1,"online host grants a valid nearby claim exactly once");
+            GameplayEffectsTestAccess::BonusPacket(game,&request,sizeof(request));check(GameplayEffectsTestAccess::BonusSerial(game,0)==1,"duplicate online requests cannot duplicate the pickup");
+        }
+        for(auto mode:{OnlineGameMode::ELIMINATION,OnlineGameMode::TEAM_DEATHMATCH,OnlineGameMode::DEATHMATCH}){nm.currentGameMode=mode;GameplayScreen game(GameMode::ONLINE);check(GameplayEffectsTestAccess::BonusCount(game)==0,"other online modes have no special pickups");}
+        nm.Disconnect();nm.currentGameMode=OnlineGameMode::FREE_FOR_ALL;
+        {
+            GameplayScreen client(GameMode::ONLINE);auto* p=client.GetLocalPlayer();PacketBonusState state{};state.header={PacketType::BONUS_STATE,0};
+            for(int i=0;i<6;++i)state.nodes[i]={GameplayEffectsTestAccess::BonusPoint(client,i),12,0,UINT32_MAX,i};
+            state.nodes[0].serial=1;state.nodes[0].owner=nm.GetLocalPlayerID();
+            GameplayEffectsTestAccess::BonusPacket(client,&state,sizeof(state));check(p->GetBonusAmmo()==0,"late grant cannot resurrect an old-life pickup without an outstanding claim");
+            GameplayEffectsTestAccess::AwaitBonus(client,0);state.nodes[0].serial=2;
+            GameplayEffectsTestAccess::BonusPacket(client,&state,sizeof(state));check(p->GetBonusAmmo()==60,"client receives a host-confirmed pickup grant");
+            p->SetShootCooldown(0);Vector2 aim=p->GetPosition();aim.x+=500;p->Shoot(aim);p->ConsumeBonusShot();
+            GameplayEffectsTestAccess::BonusPacket(client,&state,sizeof(state));check(p->GetBonusAmmo()==59,"repeated pickup state does not refill spent ammo");
+            for(int shot=0;shot<59;++shot){p->SetShootCooldown(0);p->Shoot(aim);p->ConsumeBonusShot();}
+            GameplayEffectsTestAccess::BonusTime(client,.01f);check(p->GetBonusGun()==-1 && p->GetWeaponIndex()==Settings::Get().bags[Settings::Get().activeBag].primary,"empty special gun returns automatically to the primary bag slot");
+        }
+        Offline::Get()=setup;nm.selectedMapName=map;
     }
     {
         GameplayScreen practice(GameMode::PRACTICE);

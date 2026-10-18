@@ -36,7 +36,9 @@ enum class PacketType : uint8_t {
     RETURN_LOBBY,
     PLAYER_GRENADE,
     FLAG_INTERACT,      // Client requests a drop or teammate handoff.
-    FLAG_STATE          // Host owns flag positions, carriers, and capture scores.
+    BONUS_CLAIM, BONUS_STATE,
+    FLAG_STATE,          // Host owns flag positions, carriers, and capture scores.
+    DAMAGE_CONFIRM, MATCH_RESTART, CAPTURE_CREDIT
 };
 
 // Base header for all packets
@@ -77,12 +79,15 @@ struct PacketPlayerUpdate {
     float dashTimer = 0, shieldTimer = 0;
     int weaponSkin;        // WeaponSkinId enum value
     int melee=-1,meleeSkin=0,utility=-1;
+    int bonus=-1,bonusAmmo=0;bool bonusEquipped=false;
+    float statusTime=0,statusFactor=1;
+    int shots=0,hitShots=0;float damageDealt=0;bool reloading=false;float reloadProgress=0;
 };
 
 struct PacketPlayerShoot {
     PacketHeader header;
     Vector2 aimDir;   // Normalized direction vector (not world position)
-    int weapon=0,skin=0,melee=-1,meleeSkin=0;
+    int weapon=0,skin=0,melee=-1,meleeSkin=0,bonus=-1;
 };
 
 struct PacketPlayerGrenade {
@@ -91,11 +96,15 @@ struct PacketPlayerGrenade {
     uint8_t kind; // 0 = frag, 1 = poison smoke, 2 = flashbang
 };
 
+struct PacketBonusClaim {PacketHeader header;uint8_t node;};
+struct BonusNodeWire {Vector2 position;float cooldown;uint32_t serial,owner;int kind;};
+struct PacketBonusState {PacketHeader header;BonusNodeWire nodes[6];};
 struct PacketPlayerDamage {
     PacketHeader header;
     uint32_t targetPlayerID; // Authoritative ID of damaged player (assigned by host)
     float damageAmount;
     int weaponIndex=0,weaponSkin=0; // Captured when the projectile was fired.
+    uint32_t shotID=0;
 };
 
 struct PacketPlayerKilled {
@@ -188,6 +197,8 @@ struct PacketVoiceData {
     uint16_t frameSize;      // Size of the Opus frame in bytes
     uint8_t  opusData[MAX_OPUS_FRAME_SIZE]; // The encoded audio data
 };
+struct PacketDamageConfirm {PacketHeader header;uint32_t recipient=0,serial=0,shotID=0,epoch=0;float damage=0;Vector2 position{};};
+struct PacketCaptureCredit {PacketHeader header;uint32_t actor=0;int total=0;};
 #pragma pack(pop)
 
 #endif // PACKETS_H

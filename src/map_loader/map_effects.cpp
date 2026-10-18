@@ -4,6 +4,7 @@
 #include <cstring>
 #include <map>
 #include <algorithm>
+#include <vector>
 
 float MapObjectGroundDepth(const TmxObject& object) {
  for(uint32_t i=0;i<object.propertiesLength;++i) {
@@ -198,6 +199,71 @@ static void DrawRockShore(const TmxMap* map,float time,Rectangle viewport) {
  }
 }
 
+namespace {
+float FxNoise(int seed){return std::fmod(std::abs(std::sin(seed*127.1f+311.7f)*43758.5453f),1.0f);}
+void DrawLavaBubbles(const TmxMap* map,float time,Rectangle viewport){
+ static std::map<const TmxMap*,std::vector<Vector2>> cache;
+ auto found=cache.find(map);
+ if(found==cache.end()){
+  std::vector<Rectangle> pools;float right=0,bottom=0;
+  for(uint32_t i=0;i<map->layersLength;++i){const auto& layer=map->layers[i];if(!ClassIs(layer,"lava") || layer.type!=LAYER_TYPE_OBJECT_GROUP)continue;
+   for(uint32_t j=0;j<layer.exact.objectGroup.objectsLength;++j){const auto& o=layer.exact.objectGroup.objects[j];pools.push_back({(float)o.x,(float)o.y,(float)o.width,(float)o.height});right=std::max(right,(float)(o.x+o.width));bottom=std::max(bottom,(float)(o.y+o.height));}}
+  std::vector<Vector2> positions;int seed=0;
+  for(float y=48;y<bottom;y+=176)for(float x=48;x<right;x+=192){++seed;Vector2 p{x+(FxNoise(seed)-.5f)*66,y+(FxNoise(seed+97)-.5f)*48};
+   bool clear=true;
+   for(Vector2 offset:{Vector2{0,0},Vector2{-23,-23},Vector2{23,-23},Vector2{-23,23},Vector2{23,23}}){bool liquid=false;for(const auto& pool:pools)if(CheckCollisionPointRec({p.x+offset.x,p.y+offset.y},pool)){liquid=true;break;}if(!liquid){clear=false;break;}}
+   if(clear)positions.push_back(p);}
+  found=cache.emplace(map,std::move(positions)).first;
+ }
+ int seed=0;for(Vector2 point:found->second){++seed;if(!CheckCollisionPointRec(point,{viewport.x-30,viewport.y-40,viewport.width+60,viewport.height+80}))continue;
+  float phase=std::fmod(time*(.22f+FxNoise(seed+7)*.12f)+FxNoise(seed+31),1.0f);
+  float size=4+FxNoise(seed+10)*5;
+  if(phase<.7f){float swell=std::sin(phase/.7f*PI*.5f);DrawCircleGradient(point,size*2.5f,Fade({255,193,56,255},.18f*swell),BLANK);
+   DrawEllipse((int)point.x,(int)point.y,size*swell,size*.6f*swell,{177,46,15,190});
+   DrawEllipse((int)point.x,(int)point.y-1,size*.72f*swell,size*.43f*swell,{255,168,35,210});
+   DrawLineEx({point.x-size*.35f*swell,point.y-size*.28f*swell},{point.x+size*.15f*swell,point.y-size*.32f*swell},1.3f,Fade({255,231,135,255},swell*.9f));
+  }else{float pop=(phase-.7f)/.3f,fade=1-pop;DrawEllipseLines((int)point.x,(int)point.y,size+pop*16,(size+pop*16)*.48f,Fade({255,207,79,255},fade*.65f));
+   for(int i=0;i<4;++i){float a=i*2.39996f+seed;Vector2 p{point.x+std::cos(a)*pop*20,point.y+std::sin(a)*pop*9-std::sin(pop*PI)*18};DrawLineEx(p,{p.x-std::cos(a)*3,p.y+3},1.8f,Fade({255,189,62,255},fade));}}
+ }
+}
+void DrawFoundryAtmosphere(Vector2 origin,float time,int seed){
+ bool weld=seed%3==2;float cycle=std::fmod(time+seed*1.31f,6.5f),pressure=.45f+.55f*std::sin(std::min(cycle/2.6f,1.0f)*PI);
+ float flicker=std::pow(std::max(0.0f,std::sin(time*19+seed)*std::sin(time*31+seed*3)),2.0f);
+ Color glow=weld?Color{135,208,242,255}:Color{255,145,54,255};
+ DrawCircleGradient(origin,weld?78:115,Fade(glow,weld?flicker*.26f:.1f+.045f*std::sin(time*2+seed)),BLANK);
+ Vector2 outlet=seed>=4?Vector2{origin.x+44,origin.y-137}:Vector2{origin.x,origin.y-65};
+ // A narrow pressured jet expands into drifting steam instead of a static fog disk.
+ for(int n=0;n<9;++n){float phase=std::fmod(time*(.17f+pressure*.06f)+n/9.0f+seed*.17f,1.0f);
+  Vector2 p{outlet.x+std::sin(phase*5+seed)*phase*38+phase*26,outlet.y-7-phase*(155+pressure*65)};
+  float fade=std::sin(phase*PI),radius=7+phase*38;
+  DrawCircleGradient(p,radius,Fade({176,193,201,255},fade*(weld?.23f:.29f)),BLANK);
+  DrawCircleGradient({p.x-4,p.y-3},radius*.6f,Fade({221,229,229,255},fade*.13f),BLANK);
+ }
+ int count=weld?12:7;
+ for(int n=0;n<count;++n){float phase=std::fmod(time*(weld?.85f:.55f)+n/(float)count+seed*.21f,1.0f);float a=-2.65f+FxNoise(n+seed*19)*2.2f;
+  float speed=65+FxNoise(n+seed*7)*95;Vector2 p{origin.x+std::cos(a)*speed*phase,origin.y+std::sin(a)*speed*phase+65*phase*phase};
+  float fade=std::sin(phase*PI)*(weld?.45f+.55f*flicker:.55f);Color tint=weld?Color{215,241,255,255}:Color{255,190,92,255};
+  DrawLineEx({p.x-std::cos(a)*5,p.y-std::sin(a)*4},p,1.4f,Fade(tint,fade));
+  if(n%3==0)DrawCircleGradient(p,5,Fade(tint,fade*.16f),BLANK);
+ }
+}
+void DrawDesertAtmosphere(Vector2 origin,float time,int seed){
+ float gust=.5f+.5f*std::sin(time*.62f+seed*1.7f);
+ for(int n=0;n<7;++n){float phase=std::fmod(time*(.065f+.012f*(n%3))+n/7.0f+seed*.18f,1.0f),fade=std::sin(phase*PI);
+  Vector2 p{origin.x-410+phase*820,origin.y+std::sin(n*2.4f+phase*4)*118};
+  for(int layer=0;layer<2;++layer){Vector2 strip[22];float width=(layer==0?10:3)*( .5f+.5f*gust);
+   for(int k=0;k<11;++k){float t=k/10.0f,w=width*std::sin(t*PI);float x=p.x+t*(74+gust*36),y=p.y+std::sin(t*4+phase*5)*5;
+    strip[k*2]={x,y-w};strip[k*2+1]={x,y+w};}
+   DrawTriangleStrip(strip,22,Fade({249,218,165,255},fade*(layer==0?.065f:.18f)));
+  }
+  if(n%2==0)DrawCircleGradient({p.x+35,p.y},25+gust*14,Fade({232,198,142,255},fade*.04f),BLANK);
+ }
+ for(int n=0;n<16;++n){float phase=std::fmod(time*.12f+n*.061f+seed*.23f,1.0f);Vector2 p{origin.x-350+phase*700,origin.y+(FxNoise(n+seed*37)-.5f)*300+std::sin(time+n)*9};
+  DrawLineEx(p,{p.x+3+gust*4,p.y-1},n%3==0?1.5f:1,Fade({255,229,183,255},std::sin(phase*PI)*(.18f+.18f*gust)));
+ }
+}
+}
+
 void DrawMapEffects(const TmxMap* map,float time,Rectangle viewport) {
  if(!map) return;
  if(!Settings::Get().effects) { DrawRockShore(map,time,viewport); return; }
@@ -259,6 +325,7 @@ void main(){
   }
   EndShaderMode();
  }
+ DrawLavaBubbles(map,time,viewport);
  DrawRockShore(map,time,viewport);
  // Discrete, map-authored ambience keeps the ground readable during combat.
  for(uint32_t i=0;i<map->layersLength;++i) {
@@ -268,30 +335,10 @@ void main(){
   const auto& group=layer.exact.objectGroup;
   for(uint32_t j=0;j<group.objectsLength;++j) {
    const auto& o=group.objects[j];Vector2 origin{(float)o.x,(float)o.y};
-   Rectangle area{origin.x-320,origin.y-320,640,640};
+   Rectangle area{origin.x-(desert?450.0f:180.0f),origin.y-300,desert?1000.0f:400.0f,desert?600.0f:420.0f};
    if(!CheckCollisionRecs(area,viewport)) continue;
-   if(foundry) {
-    float pulse=.18f+.035f*std::sin(time*2.1f+j);
-    DrawCircleGradient(origin,105,Fade(Color{255,151,49,255},pulse),Fade(ORANGE,0));
-    for(int n=0;n<6;++n) {
-     float phase=std::fmod(time*.13f+n/6.0f+j*.17f,1.0f);
-     Vector2 p{origin.x+std::sin(phase*5+j)*24,origin.y-35-phase*160};
-     DrawCircleGradient(p,18+phase*45,Fade(Color{169,180,183,255},std::sin(phase*PI)*.22f),Fade(WHITE,0));
-    }
-    for(int n=0;n<4;++n) {
-     float phase=std::fmod(time*.45f+n*.25f+j*.21f,1.0f);
-     Vector2 p{origin.x+std::sin(n*3.1f)*phase*45,origin.y-phase*95};
-     DrawLineEx({p.x,p.y+5},p,1.5f,Fade(Color{255,195,112,255},std::sin(phase*PI)*.65f));
-    }
-   } else {
-    for(int n=0;n<8;++n) {
-     float phase=std::fmod(time*.075f+n*.125f+j*.18f,1.0f);
-     float fade=std::sin(phase*PI);
-     Vector2 p{origin.x-260+phase*520,origin.y+std::sin(n*2.4f+phase*3)*100};
-     DrawEllipse((int)p.x,(int)p.y,40+phase*35,6+phase*5,Fade(Color{246,213,158,255},fade*.08f));
-     DrawLineEx(p,{p.x+10,p.y-2},1,Fade(Color{250,223,172,255},fade*.35f));
-    }
-   }
+   if(foundry)DrawFoundryAtmosphere(origin,time,(int)j);
+   else DrawDesertAtmosphere(origin,time,(int)j);
   }
  }
  for(uint32_t i=0;i<map->layersLength;++i) {

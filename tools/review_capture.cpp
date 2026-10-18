@@ -398,8 +398,7 @@ void webVideo() {
     int frames=0,ended=0;
     while(ended<2) {
         DWORD stream=0,flags=0;LONGLONG timestamp=0;IMFSample* sample=nullptr;
-        HRESULT read=reader->ReadSample(MF_SOURCE_READER_ANY_STREAM,0,&stream,&flags,&timestamp,&sample);
-        if(FAILED(read)) {std::cout<<"Reader ended at frame "<<frames<<", ended streams "<<ended<<std::endl;if(frames==1991)break;hr(read);}
+        hr(reader->ReadSample(MF_SOURCE_READER_ANY_STREAM,0,&stream,&flags,&timestamp,&sample));
         if(flags&MF_SOURCE_READERF_ENDOFSTREAM) {std::cout<<"End stream "<<stream<<" at "<<frames<<" frames"<<std::endl;reader->SetStreamSelection(stream,FALSE);++ended;release(sample);continue;}
         if(!sample)continue;
         hr(reader->GetCurrentMediaType(stream,&type));GUID major{};hr(type->GetGUID(MF_MT_MAJOR_TYPE,&major));UINT32 width=0,height=0,pitch=0;if(major==MFMediaType_Video){hr(MFGetAttributeSize(type,MF_MT_FRAME_SIZE,&width,&height));if(FAILED(type->GetUINT32(MF_MT_DEFAULT_STRIDE,&pitch)))pitch=width*4;}release(type);

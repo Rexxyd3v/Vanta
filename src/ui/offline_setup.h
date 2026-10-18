@@ -30,7 +30,7 @@ inline const char* Name(Mode mode) {
 inline const char* Description(Mode mode) {
     switch(mode) {
         case Mode::Training: return "Warm up freely. Unlimited respawns and no score limit.";
-        case Mode::FreeForAll: return "Every fighter for themselves. Reach the kill target.";
+        case Mode::FreeForAll: return "Random arena spawns. Fight for special pickups and reach the kill target.";
         case Mode::TeamDeathmatch: return "Fight with your squad. Team kills count toward victory.";
         case Mode::Elimination: return "One life per round. Eliminate the opposing team.";
         case Mode::Deathmatch: return "Carry your flag to the enemy base. Respawn at home; captures win.";

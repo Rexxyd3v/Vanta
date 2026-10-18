@@ -27,6 +27,8 @@ BotEnemy::BotEnemy(Vector2 startPosition, const std::string& assetPath)
     this->health = 100.0f;
     this->currentWeaponIndex = GetRandomValue(0, WeaponCount-1); // Random weapon for variety
     this->targetPosition = startPosition;
+    maneuverClock=GetRandomValue(40,90)/10.0f;
+    strafeDir=GetRandomValue(0,1)?1.0f:-1.0f;
     this->respawnDelay = (float)GetRandomValue(25, 40) / 10.0f; // 2.5-4.0s
 }
 
@@ -35,15 +37,21 @@ void BotEnemy::SetDifficulty(int level) {
     const float speeds[]={85,110,145}, cooldowns[]={1.9f,1.25f,0.75f};
     speed=speeds[difficulty]; shootCooldown=cooldowns[difficulty];
 }
-void BotEnemy::MoveToObjective(float dt,Vector2 target) {
-    if(GetFlashBlind()>0) { SetState(CharState::IDLE);return; }
+void BotEnemy::MoveToObjective(float dt,Vector2 target,Vector2 spacing) {
+    if(GetFlashBlind()>0 || IsFrozen()) { velocity={};SetState(CharState::IDLE);return; }
     if (IsDead()) return;
+    ManageAmmo();
+    if(walkable && TacticalMove(dt,target,true))return;
     Vector2 delta{target.x-position.x,target.y-position.y};
     float distance=std::sqrt(delta.x*delta.x+delta.y*delta.y);
     SetAimTarget(target); faceDirection=delta.x>=0 ? 1 : -1;
     if (distance>35) {
-        position.x+=delta.x/distance*speed*dt;
-        position.y+=delta.y/distance*speed*dt;
+        Vector2 direction{delta.x/distance+spacing.x,delta.y/distance+spacing.y};
+        float length=std::hypot(direction.x,direction.y);
+        if(length>.01f){direction.x/=length;direction.y/=length;}
+        Vector2 next{position.x+direction.x*speed*GetSlowFactor()*dt,position.y+direction.y*speed*GetSlowFactor()*dt};
+        if(!walkable || walkable(next))position=next;
+        else{next={position.x+delta.x/distance*speed*GetSlowFactor()*dt,position.y+delta.y/distance*speed*GetSlowFactor()*dt};if(!walkable || walkable(next))position=next;}
         SetState(CharState::WALK);
     } else SetState(CharState::IDLE);
 }
@@ -104,8 +112,10 @@ void BotEnemy::Update(float deltaTime) {
 }
 
 void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
-    if(GetFlashBlind()>0) { SetState(CharState::IDLE);return; }
+    if(GetFlashBlind()>0 || IsFrozen()) { velocity={};SetState(CharState::IDLE);return; }
     if (IsDead()) return;
+    ManageAmmo();
+    if(!demoMode && !isMonster && walkable){TacticalMove(deltaTime,playerPosition,false);return;}
 
     // Distance to target
     float dx = playerPosition.x - position.x;
@@ -132,8 +142,8 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
             velocity.y = 0;
             SetState(CharState::IDLE);
         }
-        position.x += velocity.x * deltaTime;
-        position.y += velocity.y * deltaTime;
+        position.x += velocity.x * GetSlowFactor() * deltaTime;
+        position.y += velocity.y * GetSlowFactor() * deltaTime;
         // Melee damage is handled in main_level.cpp (CheckCollisions / contact damage)
     } else if (demoMode) {
         // ---- DEMO / SPECTATOR MODE — professional-looking ranged AI ----
@@ -202,7 +212,7 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
         // --- Jump occasionally (not every second) ---
         bool isOnGround = (jumpHeight <= floorHeight + 1.0f && jumpVelocity <= 0.0f);
         bool startedJump = false;
-        if (isOnGround && GetRandomValue(0, 200) == 0) { // ~1/200 chance per frame — rare
+        if (isOnGround && !IsFrozen() && GetRandomValue(0, 200) == 0) { // ~1/200 chance per frame — rare
             jumpVelocity = 420.0f;
             startedJump = true;
         }
@@ -280,7 +290,7 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
         // Random jump while moving
         bool isOnGround = (jumpHeight <= floorHeight + 1.0f && jumpVelocity <= 0.0f);
         bool startedJump = false;
-        if (isMoving && isOnGround && GetRandomValue(0, 200) == 0) {
+        if (isMoving && isOnGround && !IsFrozen() && GetRandomValue(0, 200) == 0) {
             jumpVelocity = 420.0f;
             startedJump = true;
         }
@@ -295,8 +305,8 @@ void BotEnemy::UpdateAI(float deltaTime, Vector2 playerPosition) {
         }
 
         if (dashTimer <= 0.0f) {
-            position.x += velocity.x * deltaTime;
-            position.y += velocity.y * deltaTime;
+            position.x += velocity.x * GetSlowFactor() * deltaTime;
+            position.y += velocity.y * GetSlowFactor() * deltaTime;
         }
 
         // Shoot if in aggro range
@@ -338,7 +348,8 @@ bool BotEnemy::ShouldRespawn(float minimumDelay) const {
 
 void BotEnemy::ResetDeathTimer() {
     deathTimer = 0.0f;
-    isMoving = false;
+    isMoving = false;velocity={};tacticalTimer=0;evading=usingCover=false;
+    if(preferredWeapon>=0){SwitchWeapon(preferredWeapon);preferredWeapon=-1;}
     this->respawnDelay = (float)GetRandomValue(25, 40) / 10.0f; // 2.5-4.0s
 }
 
@@ -351,4 +362,76 @@ float BotEnemy::GetDrawAlpha() const {
         return spawnFadeTimer / fadeDuration; // 0.0 to 1.0
     }
     return 1.0f;
+}
+
+// Tactical decisions use the same authored collision and hazard zones as gameplay.
+void BotEnemy::ManageAmmo(){
+    if(IsDead() || BonusEquipped() || isMonster)return;
+    if(preferredWeapon>=0 && ammo[preferredWeapon]+reserveAmmo[preferredWeapon]>0){SwitchWeapon(preferredWeapon);preferredWeapon=-1;}
+    if(GetAmmo()+GetReserveAmmo()==0 && currentWeaponIndex!=2){preferredWeapon=currentWeaponIndex;SwitchWeapon(2);}
+    if(GetAmmo()==0 && GetReserveAmmo()>0 && !IsReloading())TriggerReload();
+}
+bool BotEnemy::RouteClear(Vector2 goal)const{
+    if(!walkable)return true;
+    float d=std::hypot(goal.x-position.x,goal.y-position.y);int steps=std::max(1,(int)std::ceil(d/18));
+    for(int i=1;i<=steps;++i){Vector2 p{position.x+(goal.x-position.x)*i/steps,position.y+(goal.y-position.y)*i/steps};
+        if(!walkable(p))return false;
+        for(const auto& h:hazards){float start=std::hypot(position.x-h.position.x,position.y-h.position.y),next=std::hypot(p.x-h.position.x,p.y-h.position.y);
+            if(next<h.radius+12 && next<start-1)return false;}
+    }
+    return true;
+}
+bool BotEnemy::TacticalMove(float dt,Vector2 target,bool objective){
+    bool wasEvading=evading;evading=false;usingCover=false;coverClock+=dt;
+    float danger=0;
+    for(const auto& h:hazards){float d=std::hypot(position.x-h.position.x,position.y-h.position.y);
+        if(d<h.radius+90){evading=true;danger+=(h.radius+90-d)/std::max(1.0f,h.radius);}}
+    if(objective && !evading)return false;
+    SetAimTarget(target);faceDirection=target.x>=position.x?1:-1;
+    maneuverClock-=dt;
+    bool seekCover=!objective && (IsReloading() || (health<48 && std::fmod(coverClock,3.8f)<2.4f));
+    tacticalTimer-=dt;
+    if(tacticalTimer<=0 || evading!=wasEvading){
+        tacticalTimer=evading?.12f:.32f+(2-difficulty)*.15f;
+        float best=-1e20f;Vector2 chosen=position;
+        float enemyDistance=std::hypot(target.x-position.x,target.y-position.y);
+        for(int ring=0;ring<3;++ring)for(int i=0;i<16;++i){float a=i*2*PI/16,r=ring==0?80.0f:ring==1?160.0f:260.0f;
+            Vector2 p{position.x+std::cos(a)*r,position.y+std::sin(a)*r};if(!RouteClear(p))continue;
+            float score=0;bool exposed=visible?visible(target,{p.x,p.y+35}):true;
+            if(evading){for(const auto& h:hazards)score+=std::min(450.0f,std::hypot(p.x-h.position.x,p.y-h.position.y)-h.radius)*4;score-=r*.12f;}
+            else if(seekCover){score=exposed?-800:800;score-=r*.6f;}
+            else{float ideal=(currentWeaponIndex==1 || currentWeaponIndex==6)?210:currentWeaponIndex==4?620:380;
+                score=-std::abs(std::hypot(p.x-target.x,p.y-target.y)-ideal)-r*.2f;
+                if(exposed)score+=160;
+                // Alternating flanks distribute bots instead of stacking at the target.
+                score+=std::sin(a)*strafeDir*32;
+                if(enemyDistance>1000)score-=std::hypot(p.x-target.x,p.y-target.y)*.4f;}
+            if(score>best){best=score;chosen=p;}
+        }
+        if(seekCover && visible && !visible(target,{position.x,position.y+35}))chosen=position;
+        tacticalGoal=chosen;
+    }
+    usingCover=seekCover && visible && !visible(target,{tacticalGoal.x,tacticalGoal.y+35});
+    float dx=tacticalGoal.x-position.x,dy=tacticalGoal.y-position.y,d=std::hypot(dx,dy);
+    velocity={};
+    if(d>8){float movement=speed*(evading?1.2f:1);velocity={dx/d*movement,dy/d*movement};
+        Vector2 next{position.x+velocity.x*dt*GetSlowFactor(),position.y+velocity.y*dt*GetSlowFactor()};
+        if(walkable(next) && dashTimer<=0)position=next;else tacticalTimer=0;
+        SetState(CharState::WALK);
+        if(evading && difficulty>0 && danger>.45f && RouteClear({position.x+dx/d*180,position.y+dy/d*180}))ActivateDash({dx,dy});
+    }else SetState(CharState::IDLE);
+    if(seekCover || evading)ActivateShield();
+    if(!evading && !seekCover && d>30 && maneuverClock<=0 && jumpHeight<=floorHeight+1){
+        jumpVelocity=420;maneuverClock=GetRandomValue(55,100)/10.0f;
+    }
+    if(jumpHeight>floorHeight+1 || jumpVelocity>0)SetState(jumpVelocity>0?CharState::JUMP_START:CharState::FALL);
+    float distance=std::hypot(target.x-position.x,target.y-position.y);
+    if(!objective && !evading && !IsReloading() && distance<(difficulty==0?650:difficulty==1?900:1150) &&
+       currentShootCooldown<=0 && (!visible || visible(GetHandPosition(),target))){
+        const int spread[]={90,38,8};
+        const float cadence[]={1.9f,1.25f,.75f};
+        if(Shoot({target.x+GetRandomValue(-spread[difficulty],spread[difficulty]),target.y+GetRandomValue(-spread[difficulty],spread[difficulty])}))
+            currentShootCooldown=std::max(cadence[difficulty],Weapons[currentWeaponIndex].fireRate)+GetRandomValue(0,10)/30.0f;
+    }
+    return true;
 }

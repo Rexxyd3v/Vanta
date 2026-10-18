@@ -11,7 +11,7 @@ public:
     ~Animation();
 
     void Update(float deltaTime);
-    void Draw(Vector2 position, int faceDirection, float scale = 1.0f, float rotation = 0.0f, Color tint = WHITE);
+    void Draw(Vector2 position, int faceDirection, float scale = 1.0f, float rotation = 0.0f, Color tint = WHITE, float anchorOffset = 0);
     void Reset();
     bool IsFinished() const;
     int FrameWidth() const;

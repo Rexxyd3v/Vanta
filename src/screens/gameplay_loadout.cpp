@@ -18,6 +18,7 @@ void GameplayScreen::ApplyActiveBag(bool respawn) {
 bool GameplayScreen::CanChangeBag() const {
     if(matchEndTimer>0) return false;
     if(player->IsDead()) return true;
+    if(IsFreeForAll()) return spawnGrace>0;
     Vector2 base=bagSpawnPosition;
     if(player->GetTeamID()>0 && HasTeamBases()) base=teamBasePositions[player->GetTeamID()];
     else if(HasDeathmatchBases()) {
@@ -58,14 +59,14 @@ void GameplayScreen::UpdateEquipmentCombat() {
             float damage=Bags::MeleeDamage(player->GetMeleeVariant());
             if(currentMode==GameMode::PRACTICE) {
                 float before=closest->GetHealth();closest->TakeDamage(damage);
-                if(before>closest->GetHealth()) RegisterHit(closest->GetPosition(),before-closest->GetHealth());
+                if(before>closest->GetHealth())NoteDamage(player,closest,before-closest->GetHealth(),Bags::MeleeDamageId,player->GetMeleeVariant()*4+player->GetMeleeSkin());
                 if(closest->IsDead()) RecordOfflineKill(player,closest,Bags::MeleeDamageId,player->GetMeleeVariant()*4+player->GetMeleeSkin());
             } else {
                 auto* remote=static_cast<RemotePlayer*>(closest);
                 PacketPlayerDamage packet{};packet.header={PacketType::PLAYER_DAMAGE,NetworkManager::GetInstance().GetLocalPlayerID()};
                 packet.targetPlayerID=remote->peerID;packet.damageAmount=damage;packet.weaponIndex=Bags::MeleeDamageId;
                 packet.weaponSkin=player->GetMeleeVariant()*4+player->GetMeleeSkin();
-                NetworkManager::GetInstance().SendPacket(&packet,sizeof(packet),true);RegisterHit(closest->GetPosition(),damage);
+                NetworkManager::GetInstance().SendPacket(&packet,sizeof(packet),true);
             }
         }
     }
@@ -80,7 +81,7 @@ void GameplayScreen::DrawBagHud() {
     const char* labels[]={WeaponShortName(bag.primary),WeaponShortName(bag.secondary),"MELEE","FRAG","SMOKE","FLASH"};
     for(int i=0;i<6;++i) {
         if(i>=3 && !Bags::UtilityEquipped(bag,i-3)) continue;
-        int x=710+i*90;bool selected=player->GetEquipmentSlot()==i;
+        int x=710+i*90;bool selected=!player->BonusEquipped() && player->GetEquipmentSlot()==i;
         DrawText(TextFormat("%d %s",i+1,labels[i]),x,521,9,selected?gold:Fade(muted,.7f));
         if(selected) DrawLineEx({(float)x,539},{x+24.0f,539},2,gold);
     }

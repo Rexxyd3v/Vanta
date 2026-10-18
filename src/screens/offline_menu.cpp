@@ -126,7 +126,7 @@ void OfflineMenuScreen::Draw(RenderTexture2D target) {
     auto& s=Offline::Get(); Color gold=UiTheme::AccentGold(), white=UiTheme::TextPrimary(), muted{144,164,182,255};
     auto label=[&](const char* value,Vector2 p,float size,Color color) { DrawTextEx(font,value,p,size,1,color); };
     SetupUi::Header(font,"LOCAL OPERATIONS","PLAY OFFLINE","Your rules. Your squad. No connection needed.");
-    const char* details[]={"Unlimited warm-up","Solo combat / respawn outposts","Team kills win / base respawns","One life per round / no respawns","Flag captures win / base respawns"};
+    const char* details[]={"Unlimited warm-up","Random spawns / special pickups","Team kills win / base respawns","One life per round / no respawns","Flag captures win / base respawns"};
     for (int i=0;i<5;++i) {
         Rectangle r=modeRows[i]; bool selected=(int)s.mode==i;
         SetupUi::ModeChoice(font,r,Offline::Name((Offline::Mode)i),details[i],selected,hoverMode[i]);

@@ -4,9 +4,12 @@
 #include "../ui/game_settings.h"
 #include <algorithm>
 #include <cmath>
+#include "../audio/combat_audio.h"
 
 void GameplayScreen::RegisterHit(Vector2 p, float damage) {
     hitMarker = 0.18f;
+    CombatAudio::Play(CombatAudio::Hit,player->GetPosition(),.5f);
+    if(impacts.size()<128)impacts.push_back({p,{0,-1},0,2});
     if (damageNumbers.size() >= 32) damageNumbers.erase(damageNumbers.begin());
     damageNumbers.push_back({p, damage, 0.8f});
 }
@@ -17,10 +20,11 @@ void GameplayScreen::RespawnLocal() {
     player->ResetHealth(100);
     grenadeCooldown[0] = grenadeCooldown[1] = grenadeCooldown[2] = 0;
     poisonExposure = 0;
-    player->SetPosition(player->GetTeamID() ? GetTeamSpawnPoint(player->GetTeamID()) : currentMode==GameMode::PRACTICE && offlineSetup.mode==Offline::Mode::Training ? GetFarSpawnPoint() : GetDeathmatchSpawnPoint(nm.GetLocalPlayerID()));
+    player->SetPosition(player->GetTeamID() ? GetTeamSpawnPoint(player->GetTeamID()) : currentMode==GameMode::PRACTICE && offlineSetup.mode==Offline::Mode::Training ? GetFarSpawnPoint() : RandomArenaSpawn(player));
     ResolveWorldCollision(player); ClampCharacterToWorld(player);
-    ApplyActiveBag(true);
-    deadFor = 0;
+    camera.target=player->GetPosition();
+    ApplyActiveBag(true);spawnGrace=2.0f;awaitingBonusNode=-1;
+    deadFor = 0;lifeDamage.clear();deathKiller.clear();spectateTarget=nullptr;isSpectating=false;
     eliminated.erase(nm.GetLocalPlayerID());
     if (currentMode == GameMode::ONLINE) {
         PacketPlayerRespawn p{};
@@ -38,6 +42,9 @@ void GameplayScreen::ProcessKill(uint32_t killer, uint32_t victim,int weapon,int
     const auto* victimInfo=nm.FindPlayer(victim);
     AddKillFeed(killerInfo->username,victimInfo->username,weapon,skin,killerInfo->teamID,victimInfo->teamID,
                 killer==nm.GetLocalPlayerID(),victim==nm.GetLocalPlayerID());
+    if(victim==nm.GetLocalPlayerID())BeginDeath(killer==nm.GetLocalPlayerID()?static_cast<Character*>(player):FindByPeerID(killer),weapon,skin);
+    if(killer==nm.GetLocalPlayerID() && killer!=victim){killConfirm=.65f;CombatAudio::Play(CombatAudio::Kill,player->GetPosition(),.7f);}
+    NoteMedalKill(killer,victim,nm.GetLocalPlayerID(),killer!=victim && (nm.currentGameMode==OnlineGameMode::FREE_FOR_ALL || killerInfo->teamID!=victimInfo->teamID));
     if (killer != victim) {
         if (killer == nm.GetLocalPlayerID()) nm.localKills++;
         else if (auto* rp = FindByPeerID(killer)) rp->AddKill();
@@ -54,11 +61,6 @@ void GameplayScreen::UpdateMatchFlow(float dt) {
     if (currentMode != GameMode::ONLINE) return;
     auto& nm = NetworkManager::GetInstance();
     if (matchEndTimer > 0) {
-        matchEndTimer = std::max(0.001f, matchEndTimer - dt);
-        if (matchEndTimer <= 0.001f && nm.IsHost()) {
-            PacketHeader p{PacketType::RETURN_LOBBY, 0}; nm.SendPacket(&p, sizeof(p), true);
-            returnToLobby = true;
-        }
         return;
     }
     elapsed += dt; roundElapsed += dt;
@@ -123,7 +125,7 @@ void GameplayScreen::AddKillFeed(const std::string& killer,const std::string& vi
     KillFeedEntry entry;
     entry.killer=killer.empty()?"Player":killer;
     entry.victim=victim.empty()?"Player":victim;
-    entry.weapon=std::clamp(weapon,0,WeaponCount+2); entry.skin=skin;
+    entry.weapon=std::clamp(weapon,0,Bonus::LastDamage); entry.skin=skin;
     entry.killerTeam=killerTeam; entry.victimTeam=victimTeam;
     entry.localKill=localKill; entry.localDeath=localDeath;
     killFeed.insert(killFeed.begin(),std::move(entry));

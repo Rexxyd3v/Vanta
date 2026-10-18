@@ -179,7 +179,7 @@ void LobbyScreen::Draw(RenderTexture2D target) {
     BeginTextureMode(target); SetupUi::Backdrop();
     SetupUi::Header(font,"MULTIPLAYER OPERATIONS","ONLINE LOBBY",isHost?"Host controls match settings. Assemble your squad.":"Connected. Choose a team and ready up.");
     const char* modes[]={"ELIMINATION","FREE FOR ALL","TEAM DEATHMATCH","DEATHMATCH / FLAG"};
-    const char* descriptions[]={"One life per round. No respawns.","Solo combat. Respawn at assigned outposts.","Team kills win. Respawn at your home base.","Deliver your flag. Fight, respawn, and capture."};
+    const char* descriptions[]={"One life per round. No respawns.","Random spawns. Contest special pickups.","Team kills win. Respawn at your home base.","Deliver your flag. Fight, respawn, and capture."};
     for (int i=0;i<4;++i) SetupUi::ModeChoice(font,modeRows[i],modes[i],descriptions[i],(int)nm.currentGameMode==i,hoverMode[i],isHost);
     DrawRoster();
     Rectangle mapBounds=previewBounds; mapPreview.Draw(mapBounds,font); SetupUi::MapArrows(mapBounds,isHost,hoverMap[0],hoverMap[1]);

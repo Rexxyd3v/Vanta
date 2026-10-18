@@ -22,7 +22,7 @@ bool GameplayScreen::HasTeamBases() const {
     return currentMode==GameMode::PRACTICE?Offline::TeamMode(offlineSetup.mode):NetworkManager::GetInstance().currentGameMode!=OnlineGameMode::FREE_FOR_ALL;
 }
 bool GameplayScreen::HasDeathmatchBases() const {
-    return currentMode==GameMode::PRACTICE?offlineSetup.mode==Offline::Mode::FreeForAll:NetworkManager::GetInstance().currentGameMode==OnlineGameMode::FREE_FOR_ALL;
+    return false; // FFA has random arena spawns, never bases.
 }
 Vector2 GameplayScreen::SafeSpawn(Vector2 desired) {
     Vector2 saved=player->GetPosition(),best=desired; float closest=1e10f;
@@ -91,6 +91,7 @@ void GameplayScreen::UpdateFlags(float dt,bool dropFlag,Character* actor) {
             } else if (Range(flag.position,teamBasePositions[3-team])<=FlagRules::CaptureRadius) {
                 if (currentMode==GameMode::PRACTICE) ++offlineScores[team];
                 else ++NetworkManager::GetInstance().teamScores[team];
+                CreditCapture(carrier);
                 ResetFlag(team,FlagRules::ScoreResetDelay);
                 AnnounceFlag(std::string(team==1?"GLOBAL RISK":"BLACK LIST")+" CAPTURED!",team);
                 continue;

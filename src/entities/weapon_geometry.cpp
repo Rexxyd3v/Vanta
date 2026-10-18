@@ -27,6 +27,8 @@ WeaponGeometry GetWeaponGeometry(Texture2D texture,int slot) {
                 const Vector2 grips[]={{0.34f,0.70f},{0.28f,0.75f},{0.22f,0.73f},{0.33f,0.65f},{0.27f,0.80f},{0.34f,0.70f},{0.36f,0.70f},{0.42f,0.64f}};
                 int weapon=std::clamp(slot,0,WeaponCount-1);
                 geometry.pivot={left+geometry.bounds.width*grips[weapon].x,top+geometry.bounds.height*grips[weapon].y};
+                const Vector2 supportGrips[]={{.70f,.48f},{.72f,.55f},{.25f,.76f},{.70f,.50f},{.61f,.65f},{.70f,.46f},{.62f,.62f},{.80f,.57f}};
+                geometry.support={left+geometry.bounds.width*supportGrips[weapon].x,top+geometry.bounds.height*supportGrips[weapon].y};
                 geometry.scale=visibleWidth[weapon]/geometry.bounds.width;
                 float sum=0,count=0;
                 for (int x=std::max(0,right-3);x<=right;++x) for (int y=0;y<image.height;++y)

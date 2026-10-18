@@ -34,7 +34,7 @@ void Animation::Update(float deltaTime) {
     }
 }
 
-void Animation::Draw(Vector2 position, int faceDirection, float scale, float rotation, Color tint) {
+void Animation::Draw(Vector2 position, int faceDirection, float scale, float rotation, Color tint, float anchorOffset) {
     if (frames.empty()) return;
 
     Texture2D tex = frames[currentFrame];
@@ -42,6 +42,7 @@ void Animation::Draw(Vector2 position, int faceDirection, float scale, float rot
     Rectangle destRec = { position.x, position.y, (float)tex.width * scale, (float)tex.height * scale };
     Vector2 origin = { (float)tex.width * scale / 2.0f, (float)tex.height * scale / 2.0f };
 
+    destRec.y+=anchorOffset;origin.y+=anchorOffset;
     DrawTexturePro(tex, sourceRec, destRec, origin, rotation, tint);
 }
 

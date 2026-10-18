@@ -45,12 +45,20 @@ A 66-second highlight featuring the game's original **R Gamestudio → raylib** 
 | Mode | Objective | Respawns |
 | --- | --- | --- |
 | Training | Warm up without a score limit | Unlimited |
-| Free for All | Reach the individual kill target | Outpost respawns |
+| Free for All | Reach the individual kill target | Random safe arena spawns |
 | Team Deathmatch | Reach the team kill target | Team-base respawns |
 | Elimination | Eliminate the opposing team | One life per round |
 | Deathmatch / Flag | Carry your team's flag to the enemy base; captures win | Team-base respawns |
 
 Offline setup supports **up to 15 bots**, with **Easy**, **Medium**, and **Difficult** AI. Training can also run without bots.
+
+### FFA special pickups (development build)
+
+The published v1.0.0 installer predates these changes; they are available in the current source build. Free for All uses randomized clear respawn positions, without bases. **Only offline and online FFA** spawn special pickups; Training, TDM, Elimination, and Flag do not.
+
+Contest six pickup locations across every map: **flamethrower, grenade launcher, bazooka, freeze bomb, shock grenade, and incendiary bomb**. Press the interact key (default **F**) near a ready pickup. Guns have limited ammunition and return after 28 seconds; throwable supplies return after 22 seconds. Pickups are lost on death and cannot be added to saved bags.
+
+Use **7** to re-equip a collected special gun, **1–6** to return to bag equipment, and **V** to throw a collected special bomb. Freeze locks movement, jumping, and dashing for 2.5 seconds with a visible ice shell, shock interrupts dashes and briefly disrupts vision, and incendiary bombs leave damaging fire. Explosive and area weapons can also affect their thrower. FFA bag changes are available briefly after respawning, instead of at a base. Online pickup claims and respawn timers are owned by the host; all players need the revised game build.
 
 ## Maps
 
@@ -145,3 +153,46 @@ docs/media/   README gameplay video and preview
 Created by **R Gamestudio / [@rjltyd](https://github.com/Rexxyd3v)**.
 
 Built with [raylib](https://www.raylib.com/), [ENet](http://enet.bespin.org/), [Opus](https://opus-codec.org/), [miniaudio](https://miniaud.io/), and [raytmx](src/map_loader/raytmx.h). Maps use the [Tiled](https://www.mapeditor.org/) format.
+
+### Finite ammunition (development build)
+
+All standard guns use finite magazines and reserve ammunition in offline and online matches. Reloading transfers only the missing rounds from reserve; switching weapons, skins, or bags does not refill them. Respawning restores the starting supply. The HUD shows magazine / reserve and warns when the reserve or the entire supply is empty. FFA special pickups retain their own limited ammunition.
+
+| Gun | Magazine | Reserve |
+| --- | ---: | ---: |
+| SMG | 30 | 180 |
+| Shotgun | 6 | 40 |
+| Pistol | 12 | 96 |
+| Assault rifle | 30 | 150 |
+| Sniper rifle | 5 | 30 |
+| AK rifle | 30 | 150 |
+| Double barrel | 2 | 30 |
+| Machine pistol | 24 | 168 |
+
+### Combat feedback and match reports (development build)
+
+Weapons have distinct recoil and recovery, ejected brass, and swept wall impacts with stone dust or metal sparks. Hits and kills have separate visual and sound confirmations. Combat audio uses stereo positioning and distance falloff for gunfire, footsteps, landings, reloads, throws and explosions; the SFX slider controls these sounds.
+
+When eliminated, the death recap shows the killer, weapon, and damage received that life. Use **Left / Right** to spectate living teammates in team modes or surviving opponents in FFA. Normal respawn rules still apply.
+
+After a 3.2-second outcome and score-tally transition, the match report fades in, stays open and shows the MVP, kills, deaths, shot accuracy, actual damage dealt, and flag captures. Accuracy counts a shotgun blast only once even when several pellets hit. Online hit feedback and damage statistics use victim confirmations, so blocked damage does not earn credit. Use the mouse wheel for larger leaderboards. **R** starts a rematch offline or as the online host; **Enter** returns to setup/lobby. Online clients can leave with **Enter** or wait for the host's next match. Rematches refill ammunition, clear temporary effects, and reset match stats while preserving the selected map, mode and loadout.
+
+Player weapons use separate hands anchored to their trigger grips and foregrips, including mirrored aim directions and special weapons. The support hand moves toward the magazine during reloads. Melee weapons and throwables use their own holding poses.
+
+### Movement, reloads and atmosphere (development build)
+
+Players lean smoothly into horizontal movement while their collision footprint stays fixed. Jump shadows shrink with height, and landings kick up short dust bursts matched to the arena. These effects also follow online players.
+
+Reloads visibly remove and insert magazines on SMGs, pistols and rifles. Shotguns feed shells and cycle their pump; the double barrel opens its breech to eject and load shells. Hand contacts follow the moving components, and online reload progress is synchronized. Ammo still transfers only when the reload finishes.
+
+Magma pools bubble and pop, foundry vents emit drifting steam and intermittent sparks, and desert gusts carry curved dust wisps and sand particles. Atmosphere uses map-authored emitters and respects the Effects setting.
+
+
+### Bot tactics, victory lineup and combat medals (development build)
+
+- Offline bots choose reachable cover when reloading or under pressure, peek back out, check lines of sight before firing, and steer away from incoming grenades, poison clouds and incendiary fire. Medium and difficult bots can dash out of danger. An exhausted primary switches to the pistol; respawning restores the original primary.
+- After the end-of-match score tally, the winning squad poses with its actual characters, weapons and skins before the report appears. FFA shows the top three by kills, with the champion in front. Team draws do not present a false winning squad.
+- Offline and online combat award animated, audible double-kill, triple-kill, revenge and shutdown medals. Rapid kills chain within four seconds of the previous kill; shutdown ends a living streak of at least three. Suicides and team kills never earn medals, and rematches clear the tracker.
+
+
+Offline Flag bots coordinate a single runner, spaced escorts, home defense and interception instead of converging on one objective. Roles adapt to the carrier, dropped flags, approaching enemies and available teammates. Cached map routes guide them around obstacles, with navigation aligned to each character's ground footprint and local spacing between allies.

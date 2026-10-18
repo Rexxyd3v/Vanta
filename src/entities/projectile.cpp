@@ -8,6 +8,7 @@ Projectile::Projectile(Vector2 startPosition, Vector2 direction, float speed, fl
     : position(startPosition), direction(direction), speed(speed),
       active(true), maxDistance(maxDistance), distanceTraveled(0.0f),
       damage(damage), fillColor(fillColor), lineColor(lineColor) {
+    previousPosition=startPosition;
     float length=sqrtf(direction.x*direction.x+direction.y*direction.y);
     if (std::isfinite(length) && length>0.001f) {
         this->direction={direction.x/length,direction.y/length};
@@ -19,6 +20,7 @@ Projectile::~Projectile() {}
 void Projectile::Update(float deltaTime) {
     if (!active) return;
 
+    previousPosition=position;
     float stepX = speed * direction.x * deltaTime;
     float stepY = speed * direction.y * deltaTime;
 

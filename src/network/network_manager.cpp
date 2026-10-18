@@ -1,3 +1,4 @@
+#include "../entities/bonus_catalog.h"
 #include "../rules/match_rules.h"
 #include <cmath>
 #define WIN32_LEAN_AND_MEAN
@@ -559,7 +560,7 @@ void NetworkManager::Update() {
                     bool hostOnly = wire->type == PacketType::GAME_START || wire->type == PacketType::MAP_CHANGED ||
                         wire->type == PacketType::LOBBY_SETTINGS || wire->type == PacketType::ROUND_START ||
                         wire->type == PacketType::ROUND_END || wire->type == PacketType::MATCH_STATE ||
-                        wire->type == PacketType::RETURN_LOBBY || wire->type == PacketType::PLAYER_DISCONNECT || wire->type == PacketType::FLAG_STATE;
+                        wire->type == PacketType::RETURN_LOBBY || wire->type == PacketType::PLAYER_DISCONNECT || wire->type == PacketType::FLAG_STATE || wire->type==PacketType::BONUS_STATE || wire->type==PacketType::MATCH_RESTART || wire->type==PacketType::CAPTURE_CREDIT;
                     if (hostOnly) { enet_packet_destroy(event.packet); break; }
                     wire->playerID = netEvent.senderID;
                     if (wire->type==PacketType::FLAG_INTERACT && (!matchActive || currentGameMode!=OnlineGameMode::DEATHMATCH || netEvent.data.size()!=sizeof(PacketHeader))) {
@@ -572,22 +573,28 @@ void NetworkManager::Update() {
                         if (netEvent.data.size() < sizeof(PacketPlayerDamage)) { enet_packet_destroy(event.packet); break; }
                         auto* d = reinterpret_cast<PacketPlayerDamage*>(wire);
                         auto* shooter = FindPlayer(wire->playerID); auto* victim = FindPlayer(d->targetPlayerID);
-                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 90 || d->weaponIndex<0 || d->weaponIndex>WeaponCount+2 ||
+                        if (!shooter || !victim || !std::isfinite(d->damageAmount) || d->damageAmount <= 0 || d->damageAmount > 90 || d->weaponIndex<0 || d->weaponIndex>Bonus::LastDamage ||
                             Rules::FriendlyFire(currentGameMode != OnlineGameMode::FREE_FOR_ALL, shooter->teamID, victim->teamID)) {
                             enet_packet_destroy(event.packet); break;
                         }
                     }
+                    if(wire->type==PacketType::DAMAGE_CONFIRM){
+                        if(netEvent.data.size()!=sizeof(PacketDamageConfirm)){enet_packet_destroy(event.packet);break;}
+                        const auto* p=reinterpret_cast<const PacketDamageConfirm*>(wire);
+                        if(!FindPlayer(p->recipient) || !std::isfinite(p->damage) || p->damage<=0 || p->damage>90){enet_packet_destroy(event.packet);break;}
+                    }
+                    if(wire->type==PacketType::BONUS_CLAIM && (!matchActive || currentGameMode!=OnlineGameMode::FREE_FOR_ALL || netEvent.data.size()!=sizeof(PacketBonusClaim))) {enet_packet_destroy(event.packet);break;}
                     if(wire->type==PacketType::PLAYER_SHOOT) {
                         if(netEvent.data.size()!=sizeof(PacketPlayerShoot)) { enet_packet_destroy(event.packet);break; }
                         const auto* shot=reinterpret_cast<const PacketPlayerShoot*>(wire);
-                        if(shot->weapon<0 || shot->weapon>=WeaponCount || shot->melee<-1 || shot->melee>1 || shot->meleeSkin<0 || shot->meleeSkin>3 ||
+                        if((shot->bonus>=0 && currentGameMode!=OnlineGameMode::FREE_FOR_ALL) || shot->bonus<-1 || shot->bonus>2 || shot->weapon<0 || shot->weapon>=WeaponCount || shot->melee<-1 || shot->melee>1 || shot->meleeSkin<0 || shot->meleeSkin>3 ||
                            !std::isfinite(shot->aimDir.x) || !std::isfinite(shot->aimDir.y)) { enet_packet_destroy(event.packet);break; }
                     }
                     if (wire->type == PacketType::PLAYER_GRENADE) {
                         if (!matchActive || netEvent.data.size() != sizeof(PacketPlayerGrenade)) { enet_packet_destroy(event.packet); break; }
                         auto* g = reinterpret_cast<PacketPlayerGrenade*>(wire);
                         float dx = g->target.x-g->start.x, dy = g->target.y-g->start.y;
-                        if (g->kind > 2 || !std::isfinite(g->start.x) || !std::isfinite(g->start.y) ||
+                        if ((g->kind>=3 && currentGameMode!=OnlineGameMode::FREE_FOR_ALL) || g->kind > 5 || !std::isfinite(g->start.x) || !std::isfinite(g->start.y) ||
                             !std::isfinite(g->target.x) || !std::isfinite(g->target.y) || dx*dx+dy*dy > 651*651) {
                             enet_packet_destroy(event.packet); break;
                         }
@@ -595,7 +602,7 @@ void NetworkManager::Update() {
                     if (wire->type == PacketType::PLAYER_KILLED) {
                         if (netEvent.data.size() < sizeof(PacketPlayerKilled)) { enet_packet_destroy(event.packet); break; }
                         auto* k = reinterpret_cast<PacketPlayerKilled*>(wire);
-                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID) || k->weaponIndex<0 || k->weaponIndex>WeaponCount+2) { enet_packet_destroy(event.packet); break; }
+                        if (k->victimPlayerID != wire->playerID || !FindPlayer(k->killerPlayerID) || k->weaponIndex<0 || k->weaponIndex>Bonus::LastDamage) { enet_packet_destroy(event.packet); break; }
                     }
                     if (wire->type == PacketType::PLAYER_RESPAWN && matchActive && currentGameMode == OnlineGameMode::ELIMINATION) {
                         enet_packet_destroy(event.packet); break;
@@ -759,7 +766,7 @@ void NetworkManager::Update() {
                                 enet_peer_send(peer, 0, p);
                             }
                         }
-                    } else if (packetType == PacketType::PLAYER_DAMAGE) {
+                    } else if (packetType == PacketType::PLAYER_DAMAGE || packetType==PacketType::DAMAGE_CONFIRM) {
                         if (isHost) {
                             for (size_t i = 0; i < host->peerCount; ++i) {
                                 ENetPeer* peer = &host->peers[i];

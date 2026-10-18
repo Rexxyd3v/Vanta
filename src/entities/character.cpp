@@ -8,6 +8,9 @@
 #include "../ui/weapon_skin_catalog.h"
 #include "../ui/equipment_art.h"
 #include "bag_catalog.h"
+#include "../audio/combat_audio.h"
+#include "../ui/weapon_hands.h"
+#include "../ui/weapon_reload.h"
 
 // Static combat audio flag — disabled during menu background simulation
 bool Character::combatAudioEnabled = true;
@@ -16,56 +19,6 @@ bool Character::combatAudioEnabled = true;
 // exactly where the collision shape is in the world.
 bool Character::debugDrawCollision = false;
 
-static void PlayWeaponSound(int index) {
-    static Sound sounds[WeaponCount] = { {0}, {0}, {0} };
-    static bool loaded[WeaponCount] = { false, false, false };
-
-    // Respect the global combat audio flag (muted during menu background)
-    if (!Character::IsCombatAudioEnabled()) return;
-    
-    std::string paths[WeaponCount] = {
-        "assets/sounds/weapon1.mp3", // Weapon 1 (SMG)
-        "assets/sounds/weapon3.mp3", // Weapon 2 (Shotgun)
-        "assets/sounds/weapon2.mp3", // Pistol
-        "assets/sounds/weapon1.mp3", // Assault rifle
-        "assets/sounds/weapon2.mp3", // Sniper
-        "assets/sounds/weapon1.mp3", // AK
-        "assets/sounds/weapon3.mp3", // Double barrel
-        "assets/sounds/weapon1.mp3" // Machine pistol
-    };
-    
-    if (index >= 0 && index < WeaponCount) {
-        if (!loaded[index]) {
-            Wave wave = LoadWave(paths[index].c_str());
-            if (IsWaveValid(wave)) {
-                // Convert wave format to 16-bit mono for easy silence detection
-                WaveFormat(&wave, wave.sampleRate, 16, 1);
-                short* samples = (short*)wave.data;
-                unsigned int firstActiveFrame = 0;
-                int threshold = 150; // silence threshold
-                for (unsigned int i = 0; i < wave.frameCount; ++i) {
-                    short val = samples[i];
-                    if ((val < 0 ? -val : val) > threshold) {
-                        firstActiveFrame = i;
-                        break;
-                    }
-                }
-                if (firstActiveFrame > 0) {
-                    WaveCrop(&wave, firstActiveFrame, wave.frameCount - 1);
-                }
-                sounds[index] = LoadSoundFromWave(wave);
-                UnloadWave(wave);
-            } else {
-                sounds[index] = LoadSound(paths[index].c_str());
-            }
-            loaded[index] = true;
-        }
-        if (IsSoundValid(sounds[index])) {
-            SetSoundVolume(sounds[index], Settings::Get().sfx);
-            PlaySound(sounds[index]);
-        }
-    }
-}
 
 Character::Character(Vector2 startPosition, const std::string& assetPath, float scale, int weaponSkin)
     : position(startPosition), faceDirection(1), currentState(CharState::IDLE),
@@ -77,6 +30,7 @@ Character::Character(Vector2 startPosition, const std::string& assetPath, float 
 
     for (int i = 0; i < WeaponCount; ++i) {
         ammo[i] = Weapons[i].maxAmmo;
+        reserveAmmo[i] = Weapons[i].reserveAmmo;
     }
 
     if (assetPath.find("Enemies/") != std::string::npos) {
@@ -103,21 +57,24 @@ Character::~Character() {
 }
 
 void Character::LoadAnimations(const std::string& baseDir) {
+    std::string activeDir=baseDir;
+    auto fixedHands=activeDir.find("/with hands/");
+    if(!isMonster && fixedHands!=std::string::npos)activeDir.replace(fixedHands,12,"/no hands/");
     if (baseDir.find("Enemy 3") != std::string::npos) {
-        animations[CharState::IDLE]        = new Animation(baseDir + "fly_",      6, 0.10f, true);
-        animations[CharState::WALK]        = new Animation(baseDir + "fly_",      6, 0.08f, true);
-        animations[CharState::JUMP_START]  = new Animation(baseDir + "fly_",      6, 0.10f, false);
-        animations[CharState::JUMP_END]    = new Animation(baseDir + "fly_",      6, 0.10f, false);
-        animations[CharState::FALL]        = new Animation(baseDir + "fly_",      6, 0.10f, true);
-        animations[CharState::HIT]         = new Animation(baseDir + "fly_",      6, 0.10f, false);
-        animations[CharState::DEATH]       = new Animation(baseDir + "fly_",      6, 0.10f, false);
+        animations[CharState::IDLE]        = new Animation(activeDir + "fly_",      6, 0.10f, true);
+        animations[CharState::WALK]        = new Animation(activeDir + "fly_",      6, 0.08f, true);
+        animations[CharState::JUMP_START]  = new Animation(activeDir + "fly_",      6, 0.10f, false);
+        animations[CharState::JUMP_END]    = new Animation(activeDir + "fly_",      6, 0.10f, false);
+        animations[CharState::FALL]        = new Animation(activeDir + "fly_",      6, 0.10f, true);
+        animations[CharState::HIT]         = new Animation(activeDir + "fly_",      6, 0.10f, false);
+        animations[CharState::DEATH]       = new Animation(activeDir + "fly_",      6, 0.10f, false);
     } else {
-        animations[CharState::IDLE]        = new Animation(baseDir + "idle_",      6, 0.10f, true);
-        animations[CharState::WALK]        = new Animation(baseDir + "walk_",      8, 0.08f, true);
-        animations[CharState::JUMP_START]  = new Animation(baseDir + "jumpStart_", 2, 0.10f, false);
-        animations[CharState::JUMP_END]    = new Animation(baseDir + "jumpEnd_",   3, 0.10f, false);
-        animations[CharState::FALL]        = new Animation(baseDir + "fall_",      5, 0.10f, true);
-        animations[CharState::HIT]         = new Animation(baseDir + "hit_",       3, 0.10f, false);
+        animations[CharState::IDLE]        = new Animation(activeDir + "idle_",      6, 0.10f, true);
+        animations[CharState::WALK]        = new Animation(activeDir + "walk_",      8, 0.08f, true);
+        animations[CharState::JUMP_START]  = new Animation(activeDir + "jumpStart_", 2, 0.10f, false);
+        animations[CharState::JUMP_END]    = new Animation(activeDir + "jumpEnd_",   3, 0.10f, false);
+        animations[CharState::FALL]        = new Animation(activeDir + "fall_",      5, 0.10f, true);
+        animations[CharState::HIT]         = new Animation(activeDir + "hit_",       3, 0.10f, false);
         animations[CharState::DEATH]       = new Animation(baseDir + "death_",    10, 0.10f, false);
     }
 }
@@ -167,7 +124,8 @@ float Character::GetHealth() const { return health; }
 
 void Character::SwitchWeapon(int index) {
     if (index >= 0 && index < (int)weaponTextures.size()) {
-        currentWeaponIndex = index;
+        bonusEquipped=false;
+        currentWeaponIndex = index;recoil=0;
         meleeVariant=-1;utilityItem=-1;
         shootCooldown = Weapons[index].fireRate;
         reloadTimer = 0.0f; // cancel ongoing reload
@@ -178,15 +136,24 @@ void Character::SwitchWeapon(int index) {
 Vector2 Character::GetHandPosition() const {
     float draw_y = position.y - jumpHeight;
     // Sprite is 2048x2048. Hand anchor at approx (1170, 1580) in the right-facing sprite.
-    float hand_x = position.x + (1170.0f - 1024.0f) * scale * faceDirection;
-    float hand_y = draw_y      + (1580.0f - 1024.0f) * scale;
-    return { hand_x, hand_y };
+    float x=(1170.0f-1024.0f)*scale*faceDirection,y=(1580.0f-1024.0f)*scale-feetOffset;
+    float angle=bodyLean*DEG2RAD;
+    return {position.x+x*std::cos(angle)-y*std::sin(angle),draw_y+feetOffset+x*std::sin(angle)+y*std::cos(angle)};
 }
 
+WeaponPose Character::GetBonusWeaponPose(Vector2 target)const{
+    return AimWeapon(GetHandPosition(),target,faceDirection,Bonus::HeldScale(scale),Bonus::Geometry(bonusGun));
+}
+WeaponPose Character::GetBonusWeaponPoseInDirection(Vector2 direction)const{
+    return PoseWeapon(GetHandPosition(),direction,faceDirection,Bonus::HeldScale(scale),Bonus::Geometry(bonusGun));
+}
 WeaponPose Character::GetWeaponPose(Vector2 target) const {
     Texture2D texture=weaponTextures.empty()?Texture2D{}:weaponTextures[std::clamp(currentWeaponIndex,0,(int)weaponTextures.size()-1)];
     auto geometry=GetWeaponGeometry(texture,currentWeaponIndex);
-    return AimWeapon(GetHandPosition(),target,faceDirection,scale*0.45f*geometry.scale,geometry);
+    WeaponPose pose=AimWeapon(GetHandPosition(),target,faceDirection,scale*0.45f*geometry.scale,geometry);
+    float a=-recoil*faceDirection*DEG2RAD;Vector2 dir=pose.direction;
+    Vector2 kicked{dir.x*std::cos(a)-dir.y*std::sin(a),dir.x*std::sin(a)+dir.y*std::cos(a)};
+    return PoseWeapon(GetHandPosition(),kicked,faceDirection,scale*0.45f*geometry.scale,geometry);
 }
 WeaponPose Character::GetWeaponPoseInDirection(Vector2 direction) const {
     Texture2D texture=weaponTextures.empty()?Texture2D{}:weaponTextures[std::clamp(currentWeaponIndex,0,(int)weaponTextures.size()-1)];
@@ -295,6 +262,14 @@ void Character::DrawDebugCollision() const {
 
 bool Character::Shoot(Vector2 targetPos) {
     if (IsDead() || utilityItem>=0) return false;
+    if(BonusEquipped()) {
+        if(currentShootCooldown>0 || GetFlashBlind()>0)return false;
+        Vector2 hand=GetHandPosition();float dx=targetPos.x-hand.x,dy=targetPos.y-hand.y,d=std::hypot(dx,dy);if(d<1)return false;
+        lastShotDirection=GetBonusWeaponPose(targetPos).direction;aimTarget=targetPos;bonusPending=bonusLastShot=bonusGun;--bonusAmmo;
+        ++combatStats.shots;CombatAudio::Play(bonusGun==0?CombatAudio::Flame:CombatAudio::Throw,position);
+        currentShootCooldown=Bonus::Cooldown(bonusGun);muzzleFlashTimer=.08f;justShot=true;return true;
+    }
+    bonusLastShot=-1;
     if(meleeVariant>=0) {
         if(meleeCooldown>0) return false;
         float dx=targetPos.x-position.x,dy=targetPos.y-position.y,length=std::hypot(dx,dy);
@@ -325,10 +300,12 @@ bool Character::Shoot(Vector2 targetPos) {
             lastShotDirection = dir;
             aimTarget = targetPos;
 
+            ++combatStats.shots;
+            ShotFeedback(dir);
             SpawnWeaponProjectiles(projPos,dir);
             justShot = true;
             muzzleFlashTimer = 0.08f; // Show muzzle flash
-            PlayWeaponSound(currentWeaponIndex); // play gun sound
+            CombatAudio::Weapon(currentWeaponIndex,position); // play gun sound
             return true;
         }
     }
@@ -346,6 +323,7 @@ void Character::SpawnWeaponProjectiles(Vector2 muzzle,Vector2 direction) {
         projectiles.push_back(std::make_shared<Projectile>(muzzle,ray,stats.bulletSpeed,stats.bulletRange,stats.damage,
             isMonster?RED:YELLOW,isMonster?MAROON:ORANGE));
         projectiles.back()->SetWeaponSource(currentWeaponIndex,weaponSkinId);
+        projectiles.back()->SetShotID((uint32_t)combatStats.shots);
     }
 }
 
@@ -364,9 +342,10 @@ void Character::ShootInDirection(Vector2 dir) {
     lastShotDirection=dir;
     aimTarget={pose.muzzle.x+dir.x*1000,pose.muzzle.y+dir.y*1000};
 
+    ShotFeedback(dir);recoil=0; // Remote direction already includes the shooter's recoil.
     SpawnWeaponProjectiles(projPos,dir);
     muzzleFlashTimer = 0.08f; // Show muzzle flash
-    PlayWeaponSound(currentWeaponIndex); // play gun sound for remote players
+    CombatAudio::Weapon(currentWeaponIndex,position); // play gun sound for remote players
 }
 
 void Character::Draw() {
@@ -449,11 +428,12 @@ void Character::Draw() {
             }
         }
     };
+    DrawGroundPresentation();
     drawShieldOrbit(false);
-    animations[currentState]->Draw({ position.x, draw_y }, faceDirection, scale, 0.0f, tint);
+    animations[currentState]->Draw({ position.x, draw_y }, faceDirection, scale, IsDead()?0:bodyLean, tint,feetOffset);
     // Update muzzle flash timer moved to Update()
 
-    if (!isMonster && !IsDead() && meleeVariant<0 && utilityItem<0) {
+    if (!isMonster && !IsDead() && meleeVariant<0 && utilityItem<0 && !BonusEquipped()) {
         // Always try to draw a weapon. If the selected weapon skin texture failed to load,
         // fallback to the default skin so the gun is never invisible.
         Texture2D currentTex = {0};
@@ -473,17 +453,12 @@ void Character::Draw() {
             float weaponScale = scale * 0.45f * GetWeaponGeometry(currentTex,currentWeaponIndex).scale;
             Vector2 hand = GetHandPosition();
 
-            WeaponPose pose=GetWeaponPose(aimTarget);
-            float rotation=pose.rotation;
-
-            Rectangle srcRec = { 0.0f, 0.0f,
-                                  (float)currentTex.width  * faceDirection,
-                                  (float)currentTex.height };
-            Rectangle dstRec = { hand.x, hand.y,
-                                  (float)currentTex.width  * weaponScale,
-                                  (float)currentTex.height * weaponScale };
-            Vector2 origin = pose.origin;
-            DrawWeaponSkinTexture(currentTex,srcRec,dstRec,origin,rotation,currentWeaponIndex,weaponSkinId,alpha);
+            WeaponPose pose=GetWeaponPoseInDirection(lastShotDirection);
+            if(muzzleFlashTimer<=0)pose=GetWeaponPose(aimTarget);
+            auto hold=GetWeaponHold(currentTex,currentWeaponIndex,pose,weaponScale,faceDirection,IsReloading()?GetReloadProgress():-1,pumpTimer);
+            DrawWeaponHands(hold,13*scale/.15f,alpha,false);
+            WeaponReload::Draw(currentTex,currentWeaponIndex,weaponSkinId,pose,weaponScale,faceDirection,IsReloading()?GetReloadProgress():-1,pumpTimer,alpha);
+            DrawWeaponHands(hold,13*scale/.15f,alpha,true);
 
             if (muzzleFlashTimer > 0.0f) {
                 Vector2 start=pose.muzzle, dir=pose.direction, normal{-dir.y,dir.x};
@@ -501,9 +476,31 @@ void Character::Draw() {
         }
     }
 
-    if(!isMonster && !IsDead() && (meleeVariant>=0 || utilityItem>=0))
-        DrawHeldEquipment(GetHandPosition(),aimTarget,faceDirection,meleeVariant,meleeSkin,utilityItem,meleeSwing/.28f);
+    if(!isMonster && !IsDead() && (meleeVariant>=0 || utilityItem>=0)){
+        Vector2 hand=GetHandPosition();float angle=std::atan2(aimTarget.y-hand.y,aimTarget.x-hand.x)*RAD2DEG;
+        Vector2 contact=hand;if(utilityItem>=0)contact.y+=8;
+        DrawEquipmentHand({position.x-faceDirection*20*scale/.15f,draw_y+90*scale/.15f},90,12*scale/.15f,alpha,false);
+        if(meleeVariant>=0 && meleeSwing>0)angle+=(1-meleeSwing/.28f)*130-65;
+        DrawEquipmentHand(contact,angle,13*scale/.15f,alpha,false);
+        DrawHeldEquipment(hand,aimTarget,faceDirection,meleeVariant,meleeSkin,utilityItem,meleeSwing/.28f);
+        DrawEquipmentHand(contact,angle,13*scale/.15f,alpha,true);
+    }
+    if(!IsDead() && BonusEquipped()) {
+        WeaponPose pose=GetBonusWeaponPose(aimTarget);float unit=scale/.15f,fit=Bonus::HeldScale(scale);auto g=Bonus::Geometry(bonusGun);
+        Vector2 normal{-pose.direction.y,pose.direction.x};
+        Vector2 center{pose.hand.x+pose.direction.x*(52-g.pivot.x)*fit+normal.x*(30-g.pivot.y)*fit*faceDirection,
+                       pose.hand.y+pose.direction.y*(52-g.pivot.x)*fit+normal.y*(30-g.pivot.y)*fit*faceDirection};
+        auto hold=GetBonusHold(bonusGun,pose,fit,faceDirection);DrawWeaponHands(hold,13*unit,alpha,false);
+        DrawBonusArt(bonusGun,{center.x-42*unit,center.y-22*unit,84*unit,44*unit},pose.rotation,alpha,faceDirection<0);
+        DrawWeaponHands(hold,13*unit,alpha,true);
+        if(muzzleFlashTimer>0)DrawCircleGradient(pose.muzzle,15,Fade(ORANGE,muzzleFlashTimer*7),BLANK);
+    }
+    if(!IsDead() && IsFrozen())DrawBonusIce({position.x,draw_y+55},statusSlowTimer);
+    else if(!IsDead() && GetSlowTime()>0){Vector2 p{position.x,draw_y+40};DrawEllipseLines((int)p.x,(int)p.y,50,64,Fade(Bonus::Tint(4),.8f));}
     drawShieldOrbit(true);
+    if(Settings::Get().effects)for(const auto& casing:casings){
+        float fade=std::min(1.0f,(1.6f-casing.age)*3);DrawRectanglePro({casing.position.x,casing.position.y,5,2.5f},{2.5f,1.25f},casing.spin+casing.age*540,Fade({213,178,98,255},fade));
+    }
 
     for (auto& proj : projectiles) {
         proj->Draw();
@@ -589,6 +586,7 @@ bool Character::IsAnimationFinished() const {
 }
 
 void Character::UpdatePhysics(float deltaTime) {
+    if(IsFrozen())return;
     // Apply vertical physics using floorHeight as the landing level
     if (jumpHeight > floorHeight || jumpVelocity > 0.0f) {
         jumpVelocity -= 950.0f * deltaTime; // gravity
@@ -605,7 +603,7 @@ void Character::UpdatePhysics(float deltaTime) {
 }
 
 bool Character::ActivateDash(Vector2 direction) {
-    if (!IsDead() && dashCooldown <= 0.0f && dashTimer <= 0.0f) {
+    if (!IsDead() && GetSlowFactor()>.4f && dashCooldown <= 0.0f && dashTimer <= 0.0f) {
         dashTimer = 0.22f;
         dashEchoClock = 0.0f;
         dashEchoes.clear();
@@ -632,6 +630,21 @@ bool Character::ActivateShield() {
 }
 
 void Character::UpdateSkills(float deltaTime, bool moveDash) {
+    if(std::isfinite(deltaTime) && deltaTime>0){
+        UpdateMovementPresentation(deltaTime);
+        pumpTimer=std::max(0.0f,pumpTimer-deltaTime);
+        recoil=std::max(0.0f,recoil-GunFeel[currentWeaponIndex].recovery*deltaTime);
+        if(soundTracked && !IsDead()){
+            float travel=std::hypot(position.x-soundPosition.x,position.y-soundPosition.y);
+            if(travel<100 && jumpHeight<=floorHeight+2 && !IsFrozen())stepDistance+=travel;
+            if(stepDistance>=52){stepDistance=std::fmod(stepDistance,52.0f);CombatAudio::Play(CombatAudio::Step,position,.5f);}
+
+        }
+        soundTracked=true;soundPosition=position;soundJump=jumpHeight;
+        for(auto& c:casings){c.age+=deltaTime;if(c.age<.42f){c.position.x+=c.velocity.x*deltaTime;c.position.y+=c.velocity.y*deltaTime;c.velocity.y+=400*deltaTime;}}
+        casings.erase(std::remove_if(casings.begin(),casings.end(),[](const Casing& c){return c.age>1.6f;}),casings.end());
+    }
+    statusSlowTimer=std::max(0.0f,statusSlowTimer-deltaTime);
     meleeSwing=std::max(0.0f,meleeSwing-deltaTime);meleeCooldown=std::max(0.0f,meleeCooldown-deltaTime);
     flashBlindTimer=std::max(0.0f,flashBlindTimer-deltaTime);
     if (!std::isfinite(deltaTime) || deltaTime <= 0) return;
@@ -648,8 +661,8 @@ void Character::UpdateSkills(float deltaTime, bool moveDash) {
             dashEchoClock=0.025f;
         }
         if (moveDash) {
-            position.x += dashDirection.x * speed * 3.0f * travelTime;
-            position.y += dashDirection.y * speed * 3.0f * travelTime;
+            position.x += dashDirection.x * speed * GetSlowFactor() * 3.0f * travelTime;
+            position.y += dashDirection.y * speed * GetSlowFactor() * 3.0f * travelTime;
         }
     }
     dashTimer = std::max(0.0f,dashTimer-deltaTime);
@@ -663,7 +676,9 @@ void Character::UpdateSkills(float deltaTime, bool moveDash) {
     if (reloadTimer > 0.0f) {
         reloadTimer -= deltaTime;
         if (reloadTimer <= 0.0f) {
-            ammo[currentWeaponIndex] = Weapons[currentWeaponIndex].maxAmmo;
+            if(!remoteReload){const int rounds=std::min(Weapons[currentWeaponIndex].maxAmmo-ammo[currentWeaponIndex],reserveAmmo[currentWeaponIndex]);
+                ammo[currentWeaponIndex]+=rounds;reserveAmmo[currentWeaponIndex]-=rounds;CombatAudio::Play(CombatAudio::Ready,position,.6f);}
+            if(currentWeaponIndex==1)pumpTimer=.32f;
         }
     }
 
@@ -684,6 +699,10 @@ int Character::GetAmmo() const {
     return ammo[currentWeaponIndex];
 }
 
+int Character::GetReserveAmmo() const {
+    return reserveAmmo[currentWeaponIndex];
+}
+
 int Character::GetMaxAmmo() const {
     return Weapons[currentWeaponIndex].maxAmmo;
 }
@@ -693,7 +712,10 @@ bool Character::IsReloading() const {
 }
 
 void Character::RefillAmmo() {
-    for (int i = 0; i < WeaponCount; ++i) ammo[i] = Weapons[i].maxAmmo;
+    for (int i = 0; i < WeaponCount; ++i) {
+        ammo[i] = Weapons[i].maxAmmo;
+        reserveAmmo[i] = Weapons[i].reserveAmmo;
+    }
 }
 
 float Character::GetReloadProgress() const {
@@ -701,7 +723,73 @@ float Character::GetReloadProgress() const {
 }
 
 void Character::TriggerReload() {
-    if (reloadTimer <= 0.0f && ammo[currentWeaponIndex] < Weapons[currentWeaponIndex].maxAmmo) {
+    if (!bonusEquipped && meleeVariant < 0 && utilityItem < 0 && reloadTimer <= 0.0f && reserveAmmo[currentWeaponIndex] > 0 && ammo[currentWeaponIndex] < Weapons[currentWeaponIndex].maxAmmo) {
+        remoteReload=false;
         reloadTimer = Weapons[currentWeaponIndex].reloadTime;
+        CombatAudio::Play(CombatAudio::Reload,position,.65f);
     }
+}
+
+void Character::ShotFeedback(Vector2 direction){
+    if(currentWeaponIndex==1)pumpTimer=.32f;
+    const auto& feel=GunFeel[currentWeaponIndex];recoil=std::min(feel.maximum,recoil+feel.kick);
+    if(Settings::Get().effects && currentWeaponIndex!=6){Vector2 hand=GetHandPosition();Vector2 side{-direction.y,direction.x};
+        if(casings.size()>=24)casings.erase(casings.begin());
+        casings.push_back({{hand.x+direction.x*9,hand.y+direction.y*9},{side.x*75+direction.x*20,-95+side.y*35},0,(float)GetRandomValue(0,180)});
+    }
+}
+
+void Character::UpdateMovementPresentation(float dt){
+    float leanTarget=0;
+    if(motionTracked && !IsDead() && !IsFrozen()){
+        float dx=position.x-motionPosition.x,dy=position.y-motionPosition.y;
+        if(std::hypot(dx,dy)<100)leanTarget=std::clamp(dx/dt/150.0f,-1.0f,1.0f)*(dashTimer>0?7:4.5f);
+    }
+    bodyLean+=(leanTarget-bodyLean)*(1-std::exp(-dt*13));motionPosition=position;motionTracked=true;
+    landingAge+=dt;
+    for(auto& p:landingDust){p.age+=dt;p.position.x+=p.velocity.x*dt;p.position.y+=p.velocity.y*dt;p.velocity.x*=std::exp(-dt*4);p.velocity.y*=std::exp(-dt*4);}
+    landingDust.erase(std::remove_if(landingDust.begin(),landingDust.end(),[](const LandingDust& p){return p.age>=p.lifetime;}),landingDust.end());
+    float height=std::max(0.0f,jumpHeight-floorHeight);
+    if(!IsDead() && height>1.5f){airborne=true;airPeak=std::max(airPeak,height);}
+    else if(airborne && !IsFrozen()){
+        airborne=false;landingAge=0;CombatAudio::Play(CombatAudio::Land,position,.4f+std::min(airPeak/120,.45f));
+        if(Settings::Get().effects && airPeak>8){
+            float strength=std::clamp(airPeak/70,.5f,1.5f),unit=scale/.15f;
+            for(int i=0;i<10;++i){float a=i*2.39996f;float speed=(22+(i*19)%37)*strength;
+                landingDust.push_back({{position.x+std::cos(a)*5*unit,position.y+feetOffset-floorHeight+std::sin(a)*3*unit},{std::cos(a)*speed*unit,std::sin(a)*speed*.32f*unit},0,.42f+(i%3)*.1f,(5.0f+(i%4)*1.2f)*unit});}
+        }airPeak=0;
+    }
+}
+void Character::DrawGroundPresentation(){
+    if(isMonster || IsDead())return;
+    Vector2 feet{position.x,position.y+feetOffset-floorHeight};float height=std::max(0.0f,jumpHeight-floorHeight);
+    float opacity=(.30f-.13f*std::min(1.0f,height/150))*GetDrawAlpha();float radius=GetJumpShadowRadius();
+    DrawEllipse((int)feet.x,(int)feet.y,radius,radius*.30f,Fade(BLACK,opacity));
+    DrawEllipse((int)feet.x,(int)feet.y,radius*.65f,radius*.19f,Fade(BLACK,opacity*.4f));
+    if(!Settings::Get().effects)return;
+    Color dust=surfaceStyle==1?Color{225,191,140,255}:surfaceStyle==2?Color{149,159,164,255}:Color{148,143,138,255};
+    for(const auto& p:landingDust){float fade=1-p.age/p.lifetime;float size=p.radius*(1+p.age*1.8f);
+        DrawCircleGradient(p.position,size,Fade(dust,fade*.55f),BLANK);
+        if(p.age<.2f)DrawLineEx(p.position,{p.position.x-p.velocity.x*.025f,p.position.y-p.velocity.y*.025f},1.5f,Fade(dust,fade*.65f));}
+    if(landingAge<.24f){float spread=landingAge/.24f;DrawEllipseLines((int)feet.x,(int)feet.y,17+spread*25,5+spread*8,Fade(dust,(1-spread)*.28f));}
+}
+
+// Presentation-only pose: render original idle art and the equipped gun without
+// touching life state, animations, ammo, collision, or network snapshots.
+void Character::DrawVictoryPose(Vector2 center,float size,int facing){
+    auto idle=animations.find(CharState::IDLE);if(idle==animations.end())return;
+    Vector2 savedPosition=position;float savedScale=scale,savedJump=jumpHeight,savedLean=bodyLean;
+    int savedFacing=faceDirection;
+    center.y-=idle->second->GroundFootOffset(size);
+    position=center;scale=size;jumpHeight=0;bodyLean=0;faceDirection=facing;
+    idle->second->Draw(center,facing,size,0,WHITE,feetOffset);
+    Texture2D tex=LoadWeaponSlotTexture(currentWeaponIndex,weaponSkinId);
+    if(tex.id){float fit=size*.45f*GetWeaponGeometry(tex,currentWeaponIndex).scale;
+        auto pose=GetWeaponPoseInDirection({facing*.97f,-.24f});
+        auto hold=GetWeaponHold(tex,currentWeaponIndex,pose,fit,facing);
+        DrawWeaponHands(hold,13*size/.15f,1,false);
+        WeaponReload::Draw(tex,currentWeaponIndex,weaponSkinId,pose,fit,facing,-1,0,1);
+        DrawWeaponHands(hold,13*size/.15f,1,true);
+    }
+    position=savedPosition;scale=savedScale;jumpHeight=savedJump;bodyLean=savedLean;faceDirection=savedFacing;
 }

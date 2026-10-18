@@ -51,7 +51,7 @@ void Player::Update(float deltaTime) {
     // ---- JUMP ----
     bool isOnGround = (jumpHeight <= floorHeight + 1.0f && jumpVelocity <= 0.0f);
     bool startedJumpThisFrame = false;
-    if (Settings::Pressed(Settings::Jump) && isOnGround) {
+    if (Settings::Pressed(Settings::Jump) && isOnGround && !IsFrozen()) {
         jumpVelocity = 420.0f;
         startedJumpThisFrame = true;
     }
@@ -78,7 +78,9 @@ void Player::Update(float deltaTime) {
         velocity.y *= 0.7071f;
     }
 
-    if (Settings::Pressed(Settings::Dash)) {
+    velocity.x*=GetSlowFactor();velocity.y*=GetSlowFactor();
+    if(IsFrozen())moving=false;
+    if (Settings::Pressed(Settings::Dash) && GetSlowFactor()>.4f) {
         ActivateDash(velocity);
     }
     if (Settings::Pressed(Settings::Shield)) {
@@ -129,6 +131,7 @@ void Player::Update(float deltaTime) {
             const int keys[]={KEY_ONE,KEY_TWO,KEY_THREE,KEY_FOUR,KEY_FIVE,KEY_SIX,KEY_SEVEN,KEY_EIGHT};
             for(int i=0;i<WeaponCount;++i) if(IsKeyPressed(keys[i])) SwitchWeapon(i);
         }
+        if(bagEnabled && IsKeyPressed(KEY_SEVEN)) EquipBonus();
         if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) || IsKeyDown(KEY_Z)) Shoot(aimTarget);
         if (Settings::Pressed(Settings::Reload) && GetMeleeVariant()<0 && GetUtilityItem()<0) TriggerReload();
     } else {
